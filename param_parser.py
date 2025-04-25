@@ -22,11 +22,11 @@ def parameter_parser():
     # Data
     parser.add_argument('--data-adj-mtx',
                         type=str,
-                        default='dataset/NYC/poi_cat_graph_A.csv',
+                        default='dataset/NYC/graph_A.csv',
                         help='Graph adjacent path')
     parser.add_argument('--data-node-feats',
                         type=str,
-                        default='dataset/NYC/poi_cat_graph_X.csv',
+                        default='dataset/NYC/graph_X.csv',
                         help='Graph node features path')
     parser.add_argument('--data-train',
                         type=str,
@@ -83,7 +83,7 @@ def parameter_parser():
 
     parser.add_argument('--gcn-dropout',
                         type=float,
-                        default=0.2,
+                        default=0.35,
                         help='Dropout rate for gcn')
     parser.add_argument('--gcn-nhid',
                         type=list,
@@ -95,7 +95,7 @@ def parameter_parser():
                         help='Hid dim in TransformerEncoder')
     parser.add_argument('--transformer-nlayers',
                         type=int,
-                        default=2,
+                        default=4,
                         help='Num of TransformerEncoderLayer')
     parser.add_argument('--transformer-nhead',
                         type=int,
@@ -103,7 +103,7 @@ def parameter_parser():
                         help='Num of heads in multiheadattention')
     parser.add_argument('--transformer-dropout',
                         type=float,
-                        default=0.3,
+                        default=0.2,
                         help='Dropout rate for transformer')
 
     parser.add_argument('--time-loss-weight',

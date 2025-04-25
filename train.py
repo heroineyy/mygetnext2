@@ -24,7 +24,7 @@ from dataloader import load_graph_adj_mtx, load_graph_node_features
 from model import GCN, GenericEmbeddings,Time2Vec, GatingNetwork, FuseEmbeddings5, SelfAttention,TransformerModel
 from param_parser import parameter_parser
 from utils import increment_path, calculate_laplacian_matrix, zipdir, top_k_acc_last_timestep, \
-    mAP_metric_last_timestep, MRR_metric_last_timestep, maksed_mse_loss, NDCG_metric_last_timestep, recall_metric_last_timestep,compute_last_position_loss
+    mAP_metric_last_timestep, MRR_metric_last_timestep, maksed_mse_loss, NDCG_metric_last_timestep, recall_metric_last_timestep
 
 SelfAttention
 def train(args):
@@ -61,9 +61,43 @@ def train(args):
     train_df = pd.read_csv(args.data_train)
     val_df = pd.read_csv(args.data_val)
 
-    poi_ids = list(set(train_df['POI_id'].tolist()))
+    # Build POI graph (built from train_df)
+    print('Loading POI graph...')
+    raw_A = load_graph_adj_mtx(args.data_adj_mtx)
+    raw_X = load_graph_node_features(args.data_node_feats,
+                                     args.feature1,
+                                     args.feature2,
+                                     args.feature3,
+                                     args.feature4)
+    logging.info(
+        f"raw_X.shape: {raw_X.shape}; "
+        f"Four features: {args.feature1}, {args.feature2}, {args.feature3}, {args.feature4}.")
+    logging.info(f"raw_A.shape: {raw_A.shape}; Edge from row_index to col_index with weight (frequency).")
+    num_pois = raw_X.shape[0]
+
+    # One-hot encoding poi categories
+    logging.info('One-hot encoding poi categories id')
+    one_hot_encoder = OneHotEncoder()
+    cat_list = list(raw_X[:, 1])
+    one_hot_encoder.fit(list(map(lambda x: [x], cat_list)))
+    one_hot_rlt = one_hot_encoder.transform(list(map(lambda x: [x], cat_list))).toarray()
+    num_cats = one_hot_rlt.shape[-1]
+    X = np.zeros((num_pois, raw_X.shape[-1] - 1 + num_cats), dtype=np.float32)
+    X[:, 0] = raw_X[:, 0]
+    X[:, 1:num_cats + 1] = one_hot_rlt
+    X[:, num_cats + 1:] = raw_X[:, 2:]
+    logging.info(f"After one hot encoding poi cat, X.shape: {X.shape}")
+    logging.info(f'POI categories: {list(one_hot_encoder.categories_[0])}')
+
+
+    # Normalization
+    print('Laplician matrix...')
+    A = calculate_laplacian_matrix(raw_A, mat_type='hat_rw_normd_lap_mat')
+
+    # POI id to index
+    nodes_df = pd.read_csv(args.data_node_feats)
+    poi_ids = list(set(nodes_df['node_name/poi_id'].tolist()))
     poi_id2idx_dict = dict(zip(poi_ids, range(len(poi_ids))))
-    num_pois = len(poi_ids)
 
     # User id to index
     user_ids = [str(each) for each in list(set(train_df['user_id'].to_list()))]
@@ -211,6 +245,20 @@ def train(args):
                             pin_memory=True, num_workers=args.workers,
                             collate_fn=lambda x: x)
 
+    # %% ====================== Build Models ======================
+    # Model1: POI embedding model
+    if isinstance(X, np.ndarray):
+        X = torch.from_numpy(X)
+        A = torch.from_numpy(A)
+    X = X.to(device=args.device, dtype=torch.float)
+    A = A.to(device=args.device, dtype=torch.float)
+
+    args.gcn_nfeat = X.shape[1]
+    poi_gcn_model = GCN(ninput=args.gcn_nfeat,
+                          nhid=args.gcn_nhid,
+                          noutput=args.poi_embed_dim,
+                          dropout=args.gcn_dropout)
+
 
     # %% Model2: User embedding model,
     user_embed_model = GenericEmbeddings(num_users, args.user_embed_dim)
@@ -246,6 +294,7 @@ def train(args):
 
     # Define overall loss and optimizer
     optimizer = optim.Adam(params=list(poi_embed_model.parameters()) +
+                                  list(poi_gcn_model.parameters()) +
                                   list(user_embed_model.parameters()) +
                                   list(time_embed_model.parameters()) +
                                   list(lat_embed_model.parameters()) +
@@ -276,7 +325,7 @@ def train(args):
         input_tensor = torch.tensor([value], dtype=dtype).to(device=device)
         embedding = embed_model(input_tensor)
         return torch.squeeze(embedding).to(device=device)
-    def input_traj_to_embeddings(sample):
+    def input_traj_to_embeddings(sample,poi_gcn_embeddings):
         # Parse sample
         traj_id = sample[0]
         input_seq = [each[0] for each in sample[1]]
@@ -295,8 +344,6 @@ def train(args):
         #
         # # 这里需要调用函数,该函数可以输入input_seq_category2,输出大语言模型的预测的下一个访问点的表征
         # next_point_representation = llm_prediction(input_seq_category2)
-
-
 
         # User to embedding
         user_id = traj_id.split('_')[0]
@@ -319,7 +366,9 @@ def train(args):
         # POI to embedding and fuse embeddings
         input_seq_embed = []
         for idx in range(len(input_seq)):
-            poi_embedding = get_embedding(input_seq[idx], poi_embed_model, args.device)
+            poi_gcn_embedding = poi_gcn_embeddings[input_seq[idx]]
+            poi_gcn_embedding = torch.squeeze(poi_gcn_embedding).to(device=args.device)
+            poi_embedding = 0.5*get_embedding(input_seq[idx], poi_embed_model, args.device)+0.5*poi_gcn_embedding
             time_embedding = get_embedding(input_seq_time[idx], time_embed_model, args.device, is_numeric=True)
             lat_embedding = get_embedding(np.radians(input_seq_lat[idx]), lat_embed_model, args.device, is_numeric=True)
             lon_embedding = get_embedding(np.radians(input_seq_lon[idx]), lon_embed_model, args.device, is_numeric=True)
@@ -334,8 +383,7 @@ def train(args):
             fused_embedding=torch.cat([user_embedding, poi_embedding, gated_features1], dim=-1)
             input_seq_embed.append(fused_embedding)
 
-        # todo:input_seq_embed和+aligned_last_st_embedding 进行自注意力机制的融合,参考DIN用户历史行为序列与候选商品之间的自注意力融合
-
+        # input_seq_embed和+aligned_last_st_embedding 进行自注意力机制的融合,参考DIN用户历史行为序列与候选商品之间的自注意力融合
         input_seq_embed = torch.stack(input_seq_embed, dim=0)  # 将列表转换为张量
         query = aligned_last_st_embedding.unsqueeze(0).expand(input_seq_embed.size(0), -1)  # 扩展查询以匹配输入序列的长度
         # 计算注意力分数
@@ -349,6 +397,7 @@ def train(args):
 
     # %% ====================== Train ======================
     poi_embed_model = poi_embed_model.to(device=args.device)
+    poi_gcn_model = poi_gcn_model.to(device=args.device)
     user_embed_model = user_embed_model.to(device=args.device)
     time_embed_model = time_embed_model.to(device=args.device)
     lat_embed_model = lat_embed_model.to(device=args.device)
@@ -391,6 +440,7 @@ def train(args):
 
     for epoch in range(args.epochs):
         logging.info(f"{'*' * 50}Epoch:{epoch:03d}{'*' * 50}\n")
+        poi_gcn_model.train()
         user_embed_model.train()
         poi_embed_model.train()
         time_embed_model.train()
@@ -437,6 +487,8 @@ def train(args):
             batch_seq_labels_cat = []
             batch_seq_labels_categroy = []
 
+            poi_gcn_embeddings = poi_gcn_model(X, A)
+
             # Convert input seq to embeddings
             for sample in batch:
                 input_seq = [each[0] for each in sample[1]]
@@ -449,7 +501,7 @@ def train(args):
                 label_seq_cats = [poi_idx2cat_id_dict[each] for each in label_seq]
                 label_seq_category = [poi_idx2category_id_dict[each] for each in label_seq]
 
-                input_seq_embed = input_traj_to_embeddings(sample)
+                input_seq_embed = input_traj_to_embeddings(sample,poi_gcn_embeddings)
                 batch_seq_embeds.append(input_seq_embed)
                 batch_seq_lens.append(len(input_seq))
                 batch_input_seqs.append(input_seq)
@@ -482,13 +534,13 @@ def train(args):
             y_categroy = label_padded_categroy.to(device=args.device, dtype=torch.long)
             y_pred_poi, y_pred_time, y_pred_lat, y_pred_lon, y_pred_cat, y_pred_categroy ,y_pred_week = seq_model(x, src_mask)
 
-            loss_poi = compute_last_position_loss(y_pred_poi, y_poi, batch_seq_lens)
-            loss_time = compute_last_position_loss(torch.squeeze(y_pred_time), torch.squeeze(y_time),batch_seq_lens,'time')
-            loss_lat = compute_last_position_loss(torch.squeeze(y_pred_lat), torch.squeeze(y_lat),batch_seq_lens,'time')
-            loss_lon = compute_last_position_loss(torch.squeeze(y_pred_lon), torch.squeeze(y_lon),batch_seq_lens,'time')
-            loss_week = compute_last_position_loss(y_pred_week, y_week,batch_seq_lens)
-            loss_cat = compute_last_position_loss(y_pred_cat, y_cat, batch_seq_lens)
-            loss_categroy = compute_last_position_loss(y_pred_categroy, y_categroy, batch_seq_lens)
+            loss_poi = criterion_poi(y_pred_poi.transpose(1, 2), y_poi)
+            loss_time = criterion_time(torch.squeeze(y_pred_time), torch.squeeze(y_time))
+            loss_lat = criterion_time(torch.squeeze(y_pred_lat), torch.squeeze(y_lat))
+            loss_lon = criterion_time(torch.squeeze(y_pred_lon), torch.squeeze(y_lon))
+            loss_week = criterion_week(y_pred_week.transpose(1, 2), y_week)
+            loss_cat = criterion_cat(y_pred_cat.transpose(1, 2), y_cat)
+            loss_categroy = criterion_categroy(y_pred_categroy.transpose(1, 2), y_categroy)
 
             # Final loss
             loss = loss_poi + loss_time * args.time_loss_weight + loss_cat +loss_lat + loss_lon +loss_categroy + loss_week
@@ -587,6 +639,7 @@ def train(args):
 
         user_embed_model.eval()
         poi_embed_model.eval()
+        poi_gcn_model.eval()
         time_embed_model.eval()
         lat_embed_model.eval()
         lon_embed_model.eval()
@@ -630,6 +683,8 @@ def train(args):
             batch_seq_labels_cat = []
             batch_seq_labels_categroy = []
 
+            poi_gcn_embeddings = poi_gcn_model(X, A)
+
 
             # Convert input seq to embeddings
             for sample in batch:
@@ -641,7 +696,7 @@ def train(args):
                 label_seq_week = [each[4] for each in sample[2]]
                 label_seq_cats = [poi_idx2cat_id_dict[each] for each in label_seq]
                 label_seq_category = [poi_idx2category_id_dict[each] for each in label_seq]
-                input_seq_embed = input_traj_to_embeddings(sample)
+                input_seq_embed = input_traj_to_embeddings(sample,poi_gcn_embeddings)
 
                 batch_seq_embeds.append(input_seq_embed)
                 batch_seq_lens.append(len(input_seq))
@@ -677,13 +732,13 @@ def train(args):
 
 
             # Calculate loss
-            loss_poi = compute_last_position_loss(y_pred_poi, y_poi, batch_seq_lens)
-            loss_time = compute_last_position_loss(torch.squeeze(y_pred_time), torch.squeeze(y_time),batch_seq_lens,'time')
-            loss_lat = compute_last_position_loss(torch.squeeze(y_pred_lat), torch.squeeze(y_lat),batch_seq_lens,'time')
-            loss_lon = compute_last_position_loss(torch.squeeze(y_pred_lon), torch.squeeze(y_lon),batch_seq_lens,'time')
-            loss_week = compute_last_position_loss(y_pred_week, y_week,batch_seq_lens)
-            loss_cat = compute_last_position_loss(y_pred_cat, y_cat, batch_seq_lens)
-            loss_categroy = compute_last_position_loss(y_pred_categroy, y_categroy, batch_seq_lens)
+            loss_poi = criterion_poi(y_pred_poi.transpose(1, 2), y_poi)
+            loss_time = criterion_time(torch.squeeze(y_pred_time), torch.squeeze(y_time))
+            loss_lat = criterion_time(torch.squeeze(y_pred_lat), torch.squeeze(y_lat))
+            loss_lon = criterion_time(torch.squeeze(y_pred_lon), torch.squeeze(y_lon))
+            loss_week = criterion_week(y_pred_week.transpose(1, 2), y_week)
+            loss_cat = criterion_cat(y_pred_cat.transpose(1, 2), y_cat)
+            loss_categroy = criterion_categroy(y_pred_categroy.transpose(1, 2), y_categroy)
             loss = loss_poi + loss_time * args.time_loss_weight + loss_cat + loss_lat + loss_lon +loss_categroy + loss_week
 
             # Performance measurement
