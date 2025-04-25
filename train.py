@@ -61,193 +61,14 @@ def train(args):
     train_df = pd.read_csv(args.data_train)
     val_df = pd.read_csv(args.data_val)
 
-    # # todo: 这里加载cat 和  category 语义编码(还没有想好,先不加)
-    # encode_poi_catname_df = pd.read_csv('/usr/workspace/xyy/new/GETNext/dataset/NYC/encode_poi_catname.csv')
-    # encode_poi_categories_df = pd.read_csv('/usr/workspace/xyy/new/GETNext/dataset/NYC/encode_poi_categories.csv')
-
-
-    # [改进1]:构建用户图,图节点信息包括用户的id和用户的签到次数,用户和用户之间的关系即访问了同一个poi点,权重加1,说明用户的兴趣相似
-    # todo:用户图加用户id的属性,可以改进用户图(比如用户的兴趣偏好在这里做文章)
-    # print('Loading User graph...')
-    # user_adj_mtx= "./dataset/NYC/user_graph_adj.csv"
-    # user_node_feats = "./dataset/NYC/user_graph_X.csv"
-    # user_A = load_graph_adj_mtx(user_adj_mtx)
-    # user_A = calculate_laplacian_matrix(user_A, mat_type='hat_rw_normd_lap_mat')
-    # user_X = load_graph_node_features(user_node_feats,
-    #                                       2,
-    #                                       "checkin_cnt")
-    # # one_hot_encoder = OneHotEncoder()
-    # # cat_list = list(raw_X[:, 1])
-    # # one_hot_encoder.fit(list(map(lambda x: [x], cat_list)))
-    # # one_hot_rlt = one_hot_encoder.transform(list(map(lambda x: [x], cat_list))).toarray()
-    # # num_cats = one_hot_rlt.shape[-1]
-    # # X = np.zeros((num_pois, raw_X.shape[-1] - 1 + num_cats), dtype=np.float32)
-    # # X[:, 0] = raw_X[:, 0]
-    # # X[:, 1:num_cats + 1] = one_hot_rlt
-    # # X[:, num_cats + 1:] = raw_X[:, 2:]
-    #
-    # # [改进2]:构建新的poi图,节点是poi大类,poi点和poi点之间的关系类似原来的poi点转移图构建过程,根据两个签到点是否在在同一条轨迹用户连续签到点,权重加1,说明两个poi大类别更容易被连续访问
-    # # print('Loading poi category graph... 11个类别,有语义编码')
-    # # poi_cat2_adj_mtx= "./dataset/NYC/poi_cat2_graph_adj.csv"
-    # # poi_cat2_node_feats = "./dataset/NYC/poi_cat2_graph_X.csv"
-    # # poi_cat2_A = load_graph_adj_mtx(poi_cat2_adj_mtx)
-    # # poi_cat2_A = calculate_laplacian_matrix(poi_cat2_A, mat_type='hat_rw_normd_lap_mat')
-    # # poi_cat2_X = load_graph_node_features(poi_cat2_node_feats,
-    # #                                       3,
-    # #                                       "poi_category",
-    # #                                       "checkin_cnt")
-    # #
-    # # # # 对poi图节点的特征进行处理
-    # # num_poi_cat2 = poi_cat2_X.shape[0]
-    # # logging.info('One-hot encoding poi categories id')
-    # # one_hot_encoder = OneHotEncoder()
-    # # cat2_list = list(poi_cat2_X[:, 0])
-    # # one_hot_encoder.fit(list(map(lambda x: [x], cat2_list)))
-    # # one_hot_rlt = one_hot_encoder.transform(list(map(lambda x: [x], cat2_list))).toarray()
-    # # num_cat2 = one_hot_rlt.shape[-1]
-    # # new_poi_cat2_X = np.zeros((num_poi_cat2, poi_cat2_X.shape[-1] - 1 + num_cat2), dtype=np.float32)
-    # # new_poi_cat2_X[:, 0] = poi_cat2_X[:, 1]
-    # # new_poi_cat2_X[:, 1:num_cat2 + 1] = one_hot_rlt
-    # # poi_cat2_X = new_poi_cat2_X
-    #
-    #
-    # # # [改进n]:构建新的poi图,根据地理距离构建poi图
-    # # # print('Loading geo POI graph...')
-    # # geo_poi_adj_mtx= "./dataset/NYC/geo_graph_adj.csv"
-    # # args.data_node_feats = "./dataset/NYC/geo_graph_X.csv"
-    # # geo_poi_A = load_graph_adj_mtx(geo_poi_adj_mtx)
-    # # geo_poi_A = calculate_laplacian_matrix(geo_poi_A, mat_type='hat_rw_normd_lap_mat')
-    # # geo_poi_X = load_graph_node_features(args.data_node_feats,
-    # #                                       1,
-    # #                                      args.feature1,  # 'checkin_cnt'
-    # #                                      args.feature2,  # 'poi_catid'
-    # #                                      args.feature3,  # 'latitude'
-    # #                                      args.feature4)  # 'longitude'
-    # # # 对poi图节点的特征进行处理
-    # # num_pois = geo_poi_X.shape[0]
-    # # # One-hot encoding poi categories
-    # # logging.info('One-hot encoding poi categories id')
-    # # one_hot_encoder = OneHotEncoder()
-    # # cat_list = list(geo_poi_X[:, 1])
-    # # one_hot_encoder.fit(list(map(lambda x: [x], cat_list)))
-    # # one_hot_rlt = one_hot_encoder.transform(list(map(lambda x: [x], cat_list))).toarray()
-    # # num_cats = one_hot_rlt.shape[-1]
-    # # X = np.zeros((num_pois, geo_poi_X.shape[-1] - 1 + num_cats), dtype=np.float32)
-    # # X[:, 0] = geo_poi_X[:, 0]
-    # # X[:, 1:num_cats + 1] = one_hot_rlt
-    # # X[:, num_cats + 1:] = geo_poi_X[:, 2:]
-    # # logging.info(f"After one hot encoding poi cat, X.shape: {X.shape}")
-    # # logging.info(f'POI categories: {list(one_hot_encoder.categories_[0])}')
-    # # # 读取encode_poi_catname.csv文件
-    # # encode_poi_catname_df = pd.read_csv('/usr/workspace/xyy/new/GETNext/dataset/NYC/encode_poi_catname.csv')
-    # # # 初始化一个空列表来存储编码结果
-    # # encoded_results = []
-    # # # 遍历 raw_X 的每一行
-    # # for i in range(num_pois):
-    # #     poi_catid = geo_poi_X[i, 1]
-    # #     # 根据 poi_catid 找到 encode_poi_catname.csv 中对应的行
-    # #     matching_row = encode_poi_catname_df[encode_poi_catname_df['poi_catid'] == poi_catid]
-    # #     if not matching_row.empty:
-    # #         # 获取编码结果，假设编码结果从第 3 列开始
-    # #         encoding = matching_row.iloc[0, 3:].values
-    # #         encoded_results.append(encoding)
-    # #     else:
-    # #         encoded_results.append(np.zeros(encode_poi_catname_df.shape[1] - 3))
-    # #
-    # # encoded_results = np.array(encoded_results)
-    # # X = np.hstack((X, encoded_results))
-    # # X = X.astype(np.float32)
-    # #
-    # # print('Laplician matrix...')
-    # # A = calculate_laplacian_matrix(geo_poi_A, mat_type='hat_rw_normd_lap_mat')
-    #
-    #
-    # # Build POI graph (built from train_df)
-    # # print('Loading POI cat graph... 类别而不是poi点')
-    # # # todo :这里需要重新构建poi类别图 构建图的代码在new/GETNext/new_idea1
-    # # poi_cat_A = load_graph_adj_mtx(args.data_adj_mtx)
-    # # poi_cat_X = load_graph_node_features(args.data_node_feats,
-    # #                                  1,
-    # #                                  'checkin_cnt',
-    # #                                  'poi_catname',
-    # #                                  'poi_category')
-    # #
-    # # n_features = 10
-    # # hasher1 = FeatureHasher(n_features=n_features, input_type='string')
-    # # hasher2 = FeatureHasher(n_features=n_features, input_type='string')
-    # #
-    # # # 提取第二列和第三列的类别数据
-    # # cat_name_list = list(poi_cat_X[:, 1])
-    # # category_list = list(poi_cat_X[:, 2])
-    # #
-    # # # 进行特征哈希
-    # # hashed_cat_names = hasher1.transform(map(lambda x: [x], cat_name_list)).toarray()
-    # # hashed_categories = hasher2.transform(map(lambda x: [x], category_list)).toarray()
-    # #
-    # # num_pois = poi_cat_X.shape[0]
-    # # # 构建新的特征矩阵
-    # # X = np.zeros((num_pois, poi_cat_X.shape[-1] - 2 + 2 * n_features), dtype=np.float32)
-    # # X[:, 0] = poi_cat_X[:, 0]
-    # # X[:, 1:n_features + 1] = hashed_cat_names
-    # # X[:, n_features + 1:] = hashed_categories
-    # # # # 对poi catname 图节点的特征进行处理
-    # # # one_hot_encoder = OneHotEncoder()
-    # # # cat_name_list = list(raw_X[:, 1])
-    # # # one_hot_encoder.fit(list(map(lambda x: [x], cat_name_list)))
-    # # # one_hot_rlt = one_hot_encoder.transform(list(map(lambda x: [x], cat_name_list))).toarray()
-    # # # num_cats = one_hot_rlt.shape[-1]
-    # # #
-    # # # one_hot_encoder2 = OneHotEncoder()
-    # # # category_list = list(raw_X[:, 2])
-    # # # one_hot_encoder2.fit(list(map(lambda x: [x], category_list)))
-    # # # one_hot_rlt2 = one_hot_encoder2.transform(list(map(lambda x: [x], category_list))).toarray()
-    # # # num_categorys = one_hot_rlt2.shape[-1]
-    # # #
-    # # # num_pois = raw_X.shape[0]
-    # # # X = np.zeros((num_pois, raw_X.shape[-1]-2+num_categorys+num_cats), dtype=np.float32)
-    # # # X[:,0] = raw_X[:,0]
-    # # # X[:, 1:num_cats + 1] = one_hot_rlt
-    # # # X[:, num_cats + 1:] = one_hot_rlt2
-    # # # logging.info(f"After one hot encoding poi cat, X.shape: {X.shape}")
-    # # # logging.info(f'POI categories: {list(one_hot_encoder.categories_[0])}')
-    # #
-    # # # [改进3]:在原始poi图添加语义编码,加入语义编码的catename
-    # # # 读取encode_poi_catname.csv,文件部分内容包括:poi_catid,poi_catid_code,poi_catname和编码结果
-    # # # 根据raw_X的内容部分如下:
-    # # # checkin_cnt,poi_catid,atitude,longitude,poi_category
-    # # # 6,4bf58dd8d48988d11d941735,40.76066701799484,-73.99494767189026,Arts and Entertainment
-    # # # 根据raw_X第2列的值找到encode_poi_catname.csv中的poi_catid列值相等的所在行,获取与之对应的编码结果,将其拼接到X的末端
-    # #
-    # # # 读取encode_poi_catname.csv文件
-    # # # encode_poi_catname_df = pd.read_csv('/usr/workspace/xyy/new/GETNext/dataset/NYC/my/encode_poi_catname.csv')
-    # #
-    # # # 初始化一个空列表来存储编码结果
-    # # # encoded_results = []
-    # # #
-    # # # for i in range(num_pois):
-    # # #     poi_catname = raw_X[i, 0]
-    # # #     matching_row = encode_poi_catname_df[encode_poi_catname_df['poi_catname'] == poi_catname]
-    # # #     if not matching_row.empty:
-    # # #         encoding = matching_row.iloc[0, 3:].values
-    # # #         encoded_results.append(encoding)
-    # # #     else:
-    # # #         encoded_results.append(np.zeros(encode_poi_catname_df.shape[1] - 3))
-    # # #
-    # # # encoded_results = np.array(encoded_results)
-    # # # X = np.hstack((X, encoded_results))
-    # # # X = X.astype(np.float32)
-    # #
-    # # # Normalization
-    # # A = calculate_laplacian_matrix(poi_cat_A, mat_type='hat_rw_normd_lap_mat')
-    #
-    #
-    # # poi id to index
     poi_ids = list(set(train_df['POI_id'].tolist()))
     poi_id2idx_dict = dict(zip(poi_ids, range(len(poi_ids))))
+    num_pois = len(poi_ids)
 
     # User id to index
     user_ids = [str(each) for each in list(set(train_df['user_id'].to_list()))]
     user_id2idx_dict = dict(zip(user_ids, range(len(user_ids))))
+    num_users=len(user_ids)
 
 
     # Cat name to index
@@ -260,26 +81,9 @@ def train(args):
     category_name2id_dict = dict(zip(category_names, range(len(category_names))))
     num_categroys = len(category_names)
 
-    # gcn cat name to index
-    # poi_cat_graph_df = pd.read_csv("./dataset/NYC/poi_cat_graph_X.csv") # 图
-    # gcn_cat_names = [str(each) for each in list(set(poi_cat_graph_df['poi_catname'].tolist()))]
-    # gcn_cat_names2id_dict = dict(zip(gcn_cat_names, range(len(gcn_cat_names))))
-    #
-    # # gcn category name to index
-    # poi_cat2_nodes_df = pd.read_csv("./dataset/NYC/poi_cat2_graph_X.csv") # 图
-    # gcn_category_names = [str(each) for each in list(set(poi_cat2_nodes_df['poi_category'].tolist()))]
-    # gcn_category_name2id_dict = dict(zip(gcn_category_names, range(len(gcn_category_names))))
-
-    # gcn user id to index
-    # user_nodes_df = pd.read_csv(user_node_feats) # 图
-    # user_ids1 = [str(each) for each in list(set(user_nodes_df['user_id'].tolist()))]
-    # user_id2idx_dict1 = dict(zip(user_ids1, range(len(user_ids1))))
 
     poi_idx2cat_id_dict = {}
     poi_idx2category_id_dict = {}
-
-    # poi_idx2gcn_cat_id_dict = {}
-    # poi_idx2gcn_category_id_dict = {}
 
     poi_idx2cat_name_dict = {}
     poi_idx2category_name_dict = {}
@@ -287,12 +91,10 @@ def train(args):
     for i, row in train_df.iterrows():
         poi_idx2cat_id_dict[poi_id2idx_dict[row['POI_id']]] = cat_name2id_dict[row['POI_catname']]
         poi_idx2category_id_dict[poi_id2idx_dict[row['POI_id']]]= category_name2id_dict[row['POI_category']]
-        # poi_idx2gcn_cat_id_dict[poi_id2idx_dict[row['POI_id']]] = gcn_cat_names2id_dict[row['POI_catname']]
-        # poi_idx2gcn_category_id_dict[poi_id2idx_dict[row['POI_id']]] = gcn_category_name2id_dict[row['POI_category']]
         poi_idx2cat_name_dict[poi_id2idx_dict[row['POI_id']]] = row['POI_catname']
         poi_idx2category_name_dict[poi_id2idx_dict[row['POI_id']]] = row['POI_category']
 
-    num_pois = len(poi_id2idx_dict)
+
 
 
     # %% ====================== Define Dataset ======================
@@ -409,49 +211,9 @@ def train(args):
                             pin_memory=True, num_workers=args.workers,
                             collate_fn=lambda x: x)
 
-    # %% ====================== Build Models ======================
-    # Model1: POI embedding model
-    # if isinstance(user_X, np.ndarray):
-    #     # X = torch.from_numpy(X)
-    #     # poi_cat2_X =torch.from_numpy(poi_cat2_X)
-    #
-    #     # A = torch.from_numpy(A)
-    #     # poi_cat2_A = torch.from_numpy(poi_cat2_A)
-    #
-    #     user_A = torch.from_numpy(user_A)
-    #     user_X = torch.from_numpy(user_X)
-    #
-    # # X = X.to(device=args.device, dtype=torch.float)
-    # # A = A.to(device=args.device, dtype=torch.float)
-    # #
-    # # poi_cat2_X = poi_cat2_X.to(device=args.device, dtype=torch.float)
-    # # poi_cat2_A = poi_cat2_A.to(device=args.device, dtype=torch.float)
-    #
-    # user_X = user_X.to(device=args.device, dtype=torch.float)
-    # user_A = user_A.to(device=args.device, dtype=torch.float)
-    #
-    # # args.gcn_nfeat = X.shape[1]
-    # # poi_cat_gcn_model = GCN(ninput=args.gcn_nfeat,
-    # #                       nhid=args.gcn_nhid,
-    # #                       noutput=args.cat_embed_dim,
-    # #                       dropout=args.gcn_dropout)
-    #
-    #
-    # #[改进1]
-    # user_gcn_model = GCN(ninput=user_X.shape[1],
-    #                       nhid=args.gcn_nhid,
-    #                       noutput=args.user_embed_dim,
-    #                       dropout=args.gcn_dropout)
-
-    # #[改进2]
-    # poi_cat2_gcn_model = GCN(ninput=poi_cat2_X.shape[1],
-    #                       nhid=args.gcn_nhid,
-    #                       noutput=args.cat2_embed_dim,
-    #                       dropout=args.gcn_dropout)
-
 
     # %% Model2: User embedding model,
-    user_embed_model = GenericEmbeddings(len(user_id2idx_dict), args.user_embed_dim)
+    user_embed_model = GenericEmbeddings(num_users, args.user_embed_dim)
     poi_embed_model = GenericEmbeddings(num_pois, args.poi_embed_dim)
     week_embed_model = GenericEmbeddings(7, args.week_embed_dim)
     cat_embed_model = GenericEmbeddings(num_cats, args.cat_embed_dim)
@@ -461,13 +223,6 @@ def train(args):
     time_embed_model = Time2Vec('sin', out_dim=args.time_embed_dim)
     lat_embed_model = Time2Vec('sin', out_dim=args.geo_embed_dim)
     lon_embed_model = Time2Vec('sin', out_dim=args.geo_embed_dim)
-
-
-    # %% Model5: Embedding fusion models
-    # embed_fuse_model1 = FuseEmbeddings3(args.user_embed_dim, args.user_embed_dim, 'weighted_sum') # 用户
-    # embed_fuse_model2 = FuseEmbeddings3(args.time_embed_dim, args.week_embed_dim,'concat')  # 时间
-    # embed_fuse_model3 = FuseEmbeddings3(args.geo_embed_dim, args.geo_embed_dim,'concat')  # 地理
-    # embed_fuse_model4 = FuseEmbeddings5(args.poi_embed_dim, args.cat_embed_dim, args.cat2_embed_dim)  # poi
 
 
 
@@ -491,21 +246,15 @@ def train(args):
 
     # Define overall loss and optimizer
     optimizer = optim.Adam(params=list(poi_embed_model.parameters()) +
-                                  # list(user_gcn_model.parameters()) +
-                                  # list(poi_cat_gcn_model.parameters()) +
                                   list(user_embed_model.parameters()) +
-                                  # list(poi_cat2_gcn_model.parameters()) +
                                   list(time_embed_model.parameters()) +
                                   list(lat_embed_model.parameters()) +
                                   list(lon_embed_model.parameters()) +
                                   list(week_embed_model.parameters()) +
                                   list(cat_embed_model.parameters()) +
                                   list(categroy_embed_model.parameters()) +
-                                  # list(embed_fuse_model1.parameters()) +
                                   list(embed_fuse_model2.parameters()) +
                                   list(align_layer.parameters()) +
-                                  # list(self_attention.parameters()) +
-                                  # list(embed_fuse_model4.parameters()) +
                                   list(seq_model.parameters()),
                            lr=args.lr,
                            weight_decay=args.weight_decay)
@@ -537,16 +286,10 @@ def train(args):
         input_seq_week = [each[4] for each in sample[1]]
         input_seq_cat = [poi_idx2cat_id_dict[each] for each in input_seq]
         input_seq_category = [poi_idx2category_id_dict[each] for each in input_seq]
-        # input_seq_gcn_cat = [poi_idx2gcn_cat_id_dict[each] for each in input_seq]
-        # input_seq_gcn_category = [poi_idx2gcn_category_id_dict[each] for each in input_seq]
-        #
+
         # input_seq_cat_name = [poi_idx2cat_name_dict[each] for each in input_seq]
         # input_seq_category_name = [poi_idx2category_name_dict[each] for each in input_seq]
 
-        # input_seq_category2 = [poi_idx2category_dict[each] for each in input_seq]
-        # # 只取input_seq_category2的最后20个(如果input_seq_category2不足20个,就取最后的就行)
-        # input_seq_category2 = input_seq_category2[-20:]
-        #
         # # todo 2:在这里加入大语言模型编码,根据用户访问的类别,预测下一个访问点
         # # 想法:构建提示词模板,将用户轨迹转换成自然语言,送给大模型输出下一个访问点的token表征,和轨迹序列的特征做融合
         #
@@ -558,7 +301,6 @@ def train(args):
         # User to embedding
         user_id = traj_id.split('_')[0]
         user_embedding = get_embedding(user_id2idx_dict[user_id], user_embed_model, args.device)
-        # user_embedding2 = user_embeddings[user_id2idx_dict1[user_id]] #这是gcn学到的embeding
 
         # ---------------------- 关键改进：todo:序列级融合最后一步时空信息 ----------------------
         last_seq_time = sample[2][-1][1]
@@ -583,44 +325,7 @@ def train(args):
             lon_embedding = get_embedding(np.radians(input_seq_lon[idx]), lon_embed_model, args.device, is_numeric=True)
             week_embedding = get_embedding(input_seq_week[idx], week_embed_model, args.device)
             cat_embedding = get_embedding(input_seq_cat[idx], cat_embed_model, args.device)
-            # # 获取poi_cat图编码
-            # cat_embedding2 = poi_cat_embeddings[input_seq_gcn_cat[idx]]
-            # cat_embedding2 = torch.squeeze(cat_embedding2).to(device=args.device)
-
-            # # 获取poi_cat语义编码
-            # target_row = encode_poi_catname_df[encode_poi_catname_df['poi_catname'] == input_seq_cat_name[idx]]
-            # values = target_row.iloc[:, 3:].values.flatten()
-            # cat_embedding3 = torch.tensor(values, dtype=torch.float32).to(device=args.device)
-
-            # Categroy2 to embedding
-            # categroy_idx = torch.LongTensor([input_seq_category[idx]]).to(device=args.device)
-            # cat2_embedding = categroy_embed_model(categroy_idx)
-            # cat2_embedding = torch.squeeze(cat2_embedding)
             cat2_embedding = get_embedding(input_seq_category[idx], categroy_embed_model, args.device)
-            # # 获取poi_categroy图编码
-            # cat2_embedding2 = poi_cat2_embeddings[input_seq_gcn_category[idx]]
-            # cat2_embedding2 = torch.squeeze(cat2_embedding2).to(device=args.device)
-
-            # # 获取poi_categroy语义编码
-            # target_row1 = encode_poi_categories_df[encode_poi_categories_df['poi_super_cat_name'] == input_seq_category_name[idx]]
-            # values1 = target_row1.iloc[:, 3:].values.flatten()
-            # cat2_embedding3 = torch.tensor(values1, dtype=torch.float32).to(device=args.device)
-
-            # 拼接所有特征
-            # Fuse user+poi embeds
-            # fused_user_embedding = embed_fuse_model1(user_embedding, user_embedding2)
-
-            # 组合所有特征
-            # all_features = [
-            #     fused_user_embedding, time_embedding, week_embedding, lat_embedding, lon_embedding,
-            #     poi_embedding, cat_embedding, cat2_embedding
-            # ]
-            #
-            # all_features_tensor = torch.cat(all_features, dim=-1)
-            # gate_values = embed_fuse_model2(all_features_tensor)
-            # gated_features = all_features_tensor * gate_values
-
-            # todo:改进这里
             all_features1 = [ time_embedding, week_embedding, lat_embedding, lon_embedding, cat_embedding, cat2_embedding]
             all_features_tensor1 = torch.cat(all_features1, dim=-1)
             gate_values1 = embed_fuse_model2(all_features_tensor1)
@@ -629,15 +334,6 @@ def train(args):
             fused_embedding=torch.cat([user_embedding, poi_embedding, gated_features1], dim=-1)
             input_seq_embed.append(fused_embedding)
 
-            # # Fuse user+poi embeds
-            # fused_embedding1 = embed_fuse_model1(user_embedding,user_embedding2)
-            # fused_embedding2 = embed_fuse_model2(time_embedding,week_embedding)
-            # fused_embedding3 = self_attention(lat_embedding, lon_embedding)
-            # fused_embedding4 = embed_fuse_model4(poi_embedding, cat_embedding, cat2_embedding)
-            # concat_embedding = torch.cat((fused_embedding1, fused_embedding2, fused_embedding3, fused_embedding4), dim=-1)
-
-            # Save final embed
-            # input_seq_embed.append(gated_features)
         # todo:input_seq_embed和+aligned_last_st_embedding 进行自注意力机制的融合,参考DIN用户历史行为序列与候选商品之间的自注意力融合
 
         input_seq_embed = torch.stack(input_seq_embed, dim=0)  # 将列表转换为张量
@@ -652,9 +348,6 @@ def train(args):
 
 
     # %% ====================== Train ======================
-    # poi_cat_gcn_model = poi_cat_gcn_model.to(device=args.device)
-    # poi_cat2_gcn_model = poi_cat2_gcn_model.to(device=args.device)
-    # user_gcn_model = user_gcn_model.to(device=args.device)
     poi_embed_model = poi_embed_model.to(device=args.device)
     user_embed_model = user_embed_model.to(device=args.device)
     time_embed_model = time_embed_model.to(device=args.device)
@@ -663,11 +356,8 @@ def train(args):
     week_embed_model = week_embed_model.to(device=args.device)
     cat_embed_model = cat_embed_model.to(device=args.device)
     categroy_embed_model = categroy_embed_model.to(device=args.device)
-    # embed_fuse_model1 = embed_fuse_model1.to(device=args.device)
     embed_fuse_model2 = embed_fuse_model2.to(device=args.device)
     align_layer = align_layer.to(device=args.device)
-    # self_attention = self_attention.to(device=args.device)
-    # embed_fuse_model4 = embed_fuse_model4.to(device=args.device)
     seq_model = seq_model.to(device=args.device)
 
     # %% Loop epoch
@@ -701,9 +391,6 @@ def train(args):
 
     for epoch in range(args.epochs):
         logging.info(f"{'*' * 50}Epoch:{epoch:03d}{'*' * 50}\n")
-        # poi_cat_gcn_model.train()
-        # poi_cat2_gcn_model.train()
-        # user_gcn_model.train()
         user_embed_model.train()
         poi_embed_model.train()
         time_embed_model.train()
@@ -712,11 +399,8 @@ def train(args):
         week_embed_model.train()
         cat_embed_model.train()
         categroy_embed_model.train()
-        # embed_fuse_model1.train()
         embed_fuse_model2.train()
         align_layer.train()
-        # self_attention.train()
-        # embed_fuse_model4.train()
         seq_model.train()
 
         train_batches_top1_acc_list = []
@@ -753,13 +437,8 @@ def train(args):
             batch_seq_labels_cat = []
             batch_seq_labels_categroy = []
 
-            # poi_cat_embeddings = poi_cat_gcn_model(X, A)
-            # user_embeddings = user_gcn_model(user_X, user_A)
-            # poi_cat2_embeddings = poi_cat2_gcn_model(poi_cat2_X, poi_cat2_A)
-
             # Convert input seq to embeddings
             for sample in batch:
-                # sample[0]: traj_id, sample[1]: input_seq, sample[2]: label_seq
                 input_seq = [each[0] for each in sample[1]]
                 label_seq = [each[0] for each in sample[2]]
                 label_seq_time = [each[1] for each in sample[2]]
@@ -905,9 +584,6 @@ def train(args):
                              '=' * 100)
 
         # train end --------------------------------------------------------------------------------------------------------
-        # poi_cat_gcn_model.eval()
-        # poi_cat2_gcn_model.eval()
-        # user_gcn_model.eval()
 
         user_embed_model.eval()
         poi_embed_model.eval()
@@ -917,11 +593,8 @@ def train(args):
         week_embed_model.eval()
         cat_embed_model.eval()
         categroy_embed_model.eval()
-        # embed_fuse_model1.eval()
         embed_fuse_model2.eval()
         align_layer.eval()
-        # self_attention.eval()
-        # embed_fuse_model4.eval()
         seq_model.eval()
 
         val_batches_top1_acc_list = []
@@ -957,9 +630,6 @@ def train(args):
             batch_seq_labels_cat = []
             batch_seq_labels_categroy = []
 
-            # poi_cat_embeddings = poi_cat_gcn_model(X, A)
-            # user_embeddings = user_gcn_model(user_X, user_A)
-            # poi_cat2_embeddings = poi_cat2_gcn_model(poi_cat2_X, poi_cat2_A)
 
             # Convert input seq to embeddings
             for sample in batch:
@@ -971,7 +641,6 @@ def train(args):
                 label_seq_week = [each[4] for each in sample[2]]
                 label_seq_cats = [poi_idx2cat_id_dict[each] for each in label_seq]
                 label_seq_category = [poi_idx2category_id_dict[each] for each in label_seq]
-                # input_seq_embed = torch.stack(input_traj_to_embeddings(sample, poi_cat_embeddings,user_embeddings,poi_cat2_embeddings))
                 input_seq_embed = input_traj_to_embeddings(sample)
 
                 batch_seq_embeds.append(input_seq_embed)
@@ -1198,17 +867,7 @@ def train(args):
         if args.save_embeds:
             embeddings_save_dir = os.path.join(args.save_dir, 'embeddings')
             if not os.path.exists(embeddings_save_dir): os.makedirs(embeddings_save_dir)
-            # Save best epoch embeddings
             if monitor_score >= max_val_score:
-                # Save poi embeddings
-                # poi_embeddings = poi_embed_model(X, A).detach().cpu().numpy()
-                # poi_embedding_list = []
-                # for poi_idx in range(len(poi_id2idx_dict)):
-                #     poi_embedding = poi_embeddings[poi_idx]
-                #     poi_embedding_list.append(poi_embedding)
-                # save_poi_embeddings = np.array(poi_embedding_list)
-                # np.save(os.path.join(embeddings_save_dir, 'saved_poi_embeddings'), save_poi_embeddings)
-                # Save user embeddings
                 user_embedding_list = []
                 for user_idx in range(len(user_id2idx_dict)):
                     input = torch.LongTensor([user_idx]).to(device=args.device)
@@ -1216,15 +875,6 @@ def train(args):
                     user_embedding_list.append(user_embedding)
                 user_embeddings = np.array(user_embedding_list)
                 np.save(os.path.join(embeddings_save_dir, 'saved_user_embeddings'), user_embeddings)
-                # Save cat embeddings
-                # cat_embedding_list = []
-                # for cat_idx in range(len(cat_id2idx_dict)):
-                #     input = torch.LongTensor([cat_idx]).to(device=args.device)
-                #     cat_embedding = cat_embed_model(input).detach().cpu().numpy().flatten()
-                #     cat_embedding_list.append(cat_embedding)
-                # cat_embeddings = np.array(cat_embedding_list)
-                # np.save(os.path.join(embeddings_save_dir, 'saved_cat_embeddings'), cat_embeddings)
-                # Save time embeddings
                 time_embedding_list = []
                 for time_idx in range(args.time_units):
                     input = torch.FloatTensor([time_idx]).to(device=args.device)
@@ -1238,18 +888,14 @@ def train(args):
             state_dict = {
                 'epoch': epoch,
                 'poi_embed_state_dict': poi_embed_model.state_dict(),
-                # 'user_gcn_embed_state_dict': user_gcn_model.state_dict(),
                 'user_embed_state_dict': user_embed_model.state_dict(),
                 'time_embed_state_dict': time_embed_model.state_dict(),
                 'cat_embed_state_dict': cat_embed_model.state_dict(),
-                # 'embed_fuse1_state_dict': embed_fuse_model1.state_dict(),
                 'embed_fuse2_state_dict': embed_fuse_model2.state_dict(),
                 'seq_model_state_dict': seq_model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'user_id2idx_dict': user_id2idx_dict,
                 'poi_id2idx_dict': poi_id2idx_dict,
-                # 'cat_id2idx_dict': cat_id2idx_dict,
-                # 'poi_idx2cat_idx_dict': poi_idx2cat_idx_dict,
                 'args': args,
                 'epoch_train_metrics': {
                     'epoch_train_loss': epoch_train_loss,
