@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 from scipy.sparse.linalg import eigsh
+import torch.nn as nn
 
 
 def fit_delimiter(string='', length=80, delimiter="="):
@@ -196,3 +197,42 @@ def recall_metric_last_timestep(label_pois, pred_pois, k=20):
     if total_relevant == 0:
         return 0
     return retrieved_relevant / total_relevant
+
+
+def compute_last_position_loss(predictions, targets, batch_seq_lens,type=None):
+    """
+    向量化实现的版本，效率更高
+    """
+    if type == 'time':
+        criterion = maksed_mse_loss
+    else:
+        criterion = nn.CrossEntropyLoss(ignore_index=-1)
+
+    # 确保batch_seq_lens是torch.Tensor
+    if isinstance(batch_seq_lens, list):
+        batch_seq_lens = torch.tensor(batch_seq_lens, device=predictions.device)
+
+    batch_size, max_seq_len = targets.shape
+    device = predictions.device
+
+    # 创建范围索引 [0, 1, 2, ..., max_seq_len-1]
+    range_tensor = torch.arange(max_seq_len, device=device).expand(batch_size, -1)
+
+    # 创建掩码：位置 == seq_len-1
+    mask = (range_tensor == (batch_seq_lens - 1).unsqueeze(1))
+
+    # 应用掩码获取最后一个位置的预测
+    last_predictions = predictions[mask]  # [batch_size, num_pois]
+
+    # 获取要预测的下一个POI
+    # 首先创建一个索引张量，形状为[batch_size, 1]
+    gather_indices = batch_seq_lens.unsqueeze(1)  # [batch_size, 1]
+
+    # 确保索引不越界
+    gather_indices = torch.clamp(gather_indices, 0, max_seq_len - 1)
+
+    last_targets = targets.gather(1, gather_indices).squeeze(1)  # [batch_size]
+
+    # 计算损失
+    loss = criterion(last_predictions, last_targets)
+    return loss

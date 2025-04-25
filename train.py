@@ -24,7 +24,7 @@ from dataloader import load_graph_adj_mtx, load_graph_node_features
 from model import GCN, GenericEmbeddings,Time2Vec, GatingNetwork, FuseEmbeddings5, SelfAttention,TransformerModel
 from param_parser import parameter_parser
 from utils import increment_path, calculate_laplacian_matrix, zipdir, top_k_acc_last_timestep, \
-    mAP_metric_last_timestep, MRR_metric_last_timestep, maksed_mse_loss, NDCG_metric_last_timestep, recall_metric_last_timestep
+    mAP_metric_last_timestep, MRR_metric_last_timestep, maksed_mse_loss, NDCG_metric_last_timestep, recall_metric_last_timestep,compute_last_position_loss
 
 SelfAttention
 def train(args):
@@ -482,13 +482,13 @@ def train(args):
             y_categroy = label_padded_categroy.to(device=args.device, dtype=torch.long)
             y_pred_poi, y_pred_time, y_pred_lat, y_pred_lon, y_pred_cat, y_pred_categroy ,y_pred_week = seq_model(x, src_mask)
 
-            loss_poi = criterion_poi(y_pred_poi.transpose(1, 2), y_poi)
-            loss_time = criterion_time(torch.squeeze(y_pred_time), torch.squeeze(y_time))
-            loss_lat = criterion_time(torch.squeeze(y_pred_lat), torch.squeeze(y_lat))
-            loss_lon = criterion_time(torch.squeeze(y_pred_lon), torch.squeeze(y_lon))
-            loss_week = criterion_week(y_pred_week.transpose(1, 2), y_week)
-            loss_cat = criterion_cat(y_pred_cat.transpose(1, 2), y_cat)
-            loss_categroy = criterion_categroy(y_pred_categroy.transpose(1, 2), y_categroy)
+            loss_poi = compute_last_position_loss(y_pred_poi, y_poi, batch_seq_lens)
+            loss_time = compute_last_position_loss(torch.squeeze(y_pred_time), torch.squeeze(y_time),batch_seq_lens,'time')
+            loss_lat = compute_last_position_loss(torch.squeeze(y_pred_lat), torch.squeeze(y_lat),batch_seq_lens,'time')
+            loss_lon = compute_last_position_loss(torch.squeeze(y_pred_lon), torch.squeeze(y_lon),batch_seq_lens,'time')
+            loss_week = compute_last_position_loss(y_pred_week, y_week,batch_seq_lens)
+            loss_cat = compute_last_position_loss(y_pred_cat, y_cat, batch_seq_lens)
+            loss_categroy = compute_last_position_loss(y_pred_categroy, y_categroy, batch_seq_lens)
 
             # Final loss
             loss = loss_poi + loss_time * args.time_loss_weight + loss_cat +loss_lat + loss_lon +loss_categroy + loss_week
@@ -677,13 +677,13 @@ def train(args):
 
 
             # Calculate loss
-            loss_poi = criterion_poi(y_pred_poi.transpose(1, 2), y_poi)
-            loss_time = criterion_time(torch.squeeze(y_pred_time), torch.squeeze(y_time))
-            loss_lat = criterion_time(torch.squeeze(y_pred_lat), torch.squeeze(y_lat))
-            loss_lon = criterion_time(torch.squeeze(y_pred_lon), torch.squeeze(y_lon))
-            loss_week = criterion_week(y_pred_week.transpose(1, 2), y_week)
-            loss_cat = criterion_cat(y_pred_cat.transpose(1, 2), y_cat)
-            loss_categroy = criterion_categroy(y_pred_categroy.transpose(1, 2), y_categroy)
+            loss_poi = compute_last_position_loss(y_pred_poi, y_poi, batch_seq_lens)
+            loss_time = compute_last_position_loss(torch.squeeze(y_pred_time), torch.squeeze(y_time),batch_seq_lens,'time')
+            loss_lat = compute_last_position_loss(torch.squeeze(y_pred_lat), torch.squeeze(y_lat),batch_seq_lens,'time')
+            loss_lon = compute_last_position_loss(torch.squeeze(y_pred_lon), torch.squeeze(y_lon),batch_seq_lens,'time')
+            loss_week = compute_last_position_loss(y_pred_week, y_week,batch_seq_lens)
+            loss_cat = compute_last_position_loss(y_pred_cat, y_cat, batch_seq_lens)
+            loss_categroy = compute_last_position_loss(y_pred_categroy, y_categroy, batch_seq_lens)
             loss = loss_poi + loss_time * args.time_loss_weight + loss_cat + loss_lat + loss_lon +loss_categroy + loss_week
 
             # Performance measurement
