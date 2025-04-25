@@ -368,7 +368,8 @@ def train(args):
         for idx in range(len(input_seq)):
             poi_gcn_embedding = poi_gcn_embeddings[input_seq[idx]]
             poi_gcn_embedding = torch.squeeze(poi_gcn_embedding).to(device=args.device)
-            poi_embedding = 0.5*get_embedding(input_seq[idx], poi_embed_model, args.device)+0.5*poi_gcn_embedding
+            # poi_embedding = get_embedding(input_seq[idx], poi_embed_model, args.device)
+            poi_embedding = poi_gcn_embedding
             time_embedding = get_embedding(input_seq_time[idx], time_embed_model, args.device, is_numeric=True)
             lat_embedding = get_embedding(np.radians(input_seq_lat[idx]), lat_embed_model, args.device, is_numeric=True)
             lon_embedding = get_embedding(np.radians(input_seq_lon[idx]), lon_embed_model, args.device, is_numeric=True)
