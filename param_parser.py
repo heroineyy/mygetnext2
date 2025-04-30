@@ -17,7 +17,7 @@ def parameter_parser():
                         help='Random seed')
     parser.add_argument('--device',
                         type=str,
-                        default=2,
+                        default=device,
                         help='')
     # Data
     parser.add_argument('--data-adj-mtx',
@@ -99,7 +99,7 @@ def parameter_parser():
                         help='Num of TransformerEncoderLayer')
     parser.add_argument('--transformer-nhead',
                         type=int,
-                        default=2,
+                        default=4,
                         help='Num of heads in multiheadattention')
     parser.add_argument('--transformer-dropout',
                         type=float,
