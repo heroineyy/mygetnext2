@@ -16,7 +16,8 @@ dataset/NYC/*
 !dataset/NYC/NYC_val_with_categories.csv
 !dataset/NYC/NYC_train.csv
 !dataset/NYC/NYC_val.csv
-
+!dataset/NYC/cache_trajectory_train_*.pkl
+!dataset/NYC/cache_trajectory_val_*.pkl
 # 隐藏文件（保留 .gitignore 和 .git 目录）
 **/.*
 !/.gitignore

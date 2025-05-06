@@ -24,7 +24,7 @@ import requests
 import json
 
 from dataloader import load_graph_adj_mtx, load_graph_node_features
-from model import GCN, GenericEmbeddings,Time2Vec, GatingNetwork, FuseEmbeddings5, SelfAttention,TransformerModel
+from model import GCN, GenericEmbeddings,Time2Vec, GatingNetwork,TransformerModel
 from param_parser import parameter_parser
 from utils import increment_path, calculate_laplacian_matrix, zipdir, top_k_acc_last_timestep, \
     mAP_metric_last_timestep, MRR_metric_last_timestep, maksed_mse_loss, NDCG_metric_last_timestep, recall_metric_last_timestep
@@ -333,12 +333,9 @@ def train(args):
                                  dropout=args.transformer_dropout)
 
     embed_fuse_model2 = GatingNetwork(args.seq_input_embed, args.gating_hidden_dim).to(args.device)
-
     align_layer = nn.Linear(args.seq_input_embed3, args.seq_input_embed).to(args.device) # 将seq_input_embed3线性转换为seq_input_embed,对齐
-
-    # 这里可能需要改进
-
-    llm_extractor = LLMFeatureExtractor()
+    multihead_attn = nn.MultiheadAttention(embed_dim=args.seq_input_embed, num_heads=4).to(args.device)
+    layer_norm = nn.LayerNorm(args.seq_input_embed).to(args.device)
 
 
     # Define overall loss and optimizer
@@ -353,6 +350,8 @@ def train(args):
                                   list(categroy_embed_model.parameters()) +
                                   list(embed_fuse_model2.parameters()) +
                                   list(align_layer.parameters()) +
+                                  list(multihead_attn.parameters()) +
+                                  list(layer_norm.parameters()) +
                                   list(seq_model.parameters()),
                            lr=args.lr,
                            weight_decay=args.weight_decay)
@@ -375,31 +374,14 @@ def train(args):
         embedding = embed_model(input_tensor)
         return torch.squeeze(embedding).to(device=device)
 
-    def create_trajectory_prompt(input_seq_cat_name, input_seq_category_name, input_seq_time, input_seq_week, input_seq_lat,
-                           input_seq_lon):
-        """Build enhanced prompts for trajectory encoding"""
-        prompt = """Please analyze the following user trajectory and predict the next most likely location category to visit.
-
-Trajectory Details:
-"""
-        for i, (cat, cat2, time, week, lat, lon) in enumerate(
-                zip(input_seq_cat_name, input_seq_category_name, input_seq_time, input_seq_week, input_seq_lat,
-                    input_seq_lon)):
-            prompt += f"Visit {i + 1}: {cat} ({cat2})\n"
-            prompt += f"Time: {time}, Day: {week}\n"
-            prompt += f"Location: ({lat}, {lon})\n\n"
-
-        prompt += """Based on the above trajectory pattern, predict the next most likely location category the user will visit.
-Notes:
-1. Return only the category name, without any additional text
-2. The category name must match the format of previous categories
-3. Consider the influence of time, day of week, and location information
-
-The predicted next location category is: """
-        return prompt
-
 
     def input_traj_to_embeddings(sample, poi_gcn_embeddings):
+        # todo:改进建议:
+        # 添加特征重要性权重
+        # 使用更复杂的特征融合方式
+        # 考虑添加位置编码
+        # 增加特征交互层
+        # 添加dropout防止过拟合
         # Parse sample
         traj_id = sample[0]
         input_seq = [each[0] for each in sample[1]]
@@ -410,23 +392,9 @@ The predicted next location category is: """
         input_seq_cat = [poi_idx2cat_id_dict[each] for each in input_seq]
         input_seq_category = [poi_idx2category_id_dict[each] for each in input_seq]
 
-        input_seq_cat_name = [poi_idx2cat_name_dict[each] for each in input_seq]
-        input_seq_category_name = [poi_idx2category_name_dict[each] for each in input_seq]
-
-        # Create enhanced prompt
-        prompt = create_trajectory_prompt(input_seq_cat_name, input_seq_category_name, input_seq_time, input_seq_week, input_seq_lat, input_seq_lon)
-
-        # todo:llm_extractor.get_embedding设计可以传递两个参数,除了prompt外,还有可选模型,所以llm_extractor.get_embedding需要重新构造,可选nomic-embed-text model或者llama3.1,
-        #  当然llama3.1是语言模型,所以一定要限制他只输出poi-id,那么和nomic-embed-text不同,我们需要再调用poi_embed_model把它转换成向量,
-        #  或者选用其他的办法,无论如何让这里的最终的目的是借用llm提取轨迹的语义
-
-        llm_embedding = llm_extractor.get_embedding(prompt, poi_embed_model)
-        if llm_embedding is None:
-            llm_embedding = torch.zeros(768, device=args.device)
-        
-        # 2. 将 LLM embedding 直接投影到 seq_input_embed 维度
-        llm_projection = nn.Linear(768, args.seq_input_embed).to(args.device)
-        llm_embedding_projected = llm_projection(llm_embedding)  # shape: [seq_input_embed]
+        # todo:如何让用到下面的信息?
+        # input_seq_cat_name = [poi_idx2cat_name_dict[each] for each in input_seq]
+        # input_seq_category_name = [poi_idx2category_name_dict[each] for each in input_seq]
         
         # 3. 获取用户和时空特征
         user_id = traj_id.split('_')[0]
@@ -472,28 +440,15 @@ The predicted next location category is: """
         input_seq_embed = torch.stack(input_seq_embed, dim=0)  # shape: [seq_len, seq_input_embed]
         query = aligned_last_st_embedding.unsqueeze(0).expand(input_seq_embed.size(0), -1)  # shape: [seq_len, seq_input_embed]
         
-        # 使用多头注意力
-        multihead_attn = nn.MultiheadAttention(embed_dim=args.seq_input_embed, num_heads=4).to(args.device)
+        # 使用全局定义的注意力层和归一化层
         attn_output, _ = multihead_attn(query, input_seq_embed, input_seq_embed)  # shape: [seq_len, seq_input_embed]
         
         # 7. 添加残差连接
         attn_output = attn_output + input_seq_embed  # shape: [seq_len, seq_input_embed]
         
-        # 8. 扩展 LLM 特征以匹配序列长度
-        llm_embedding_projected = llm_embedding_projected.unsqueeze(0).expand(input_seq_embed.size(0), -1)  # shape: [seq_len, seq_input_embed]
-        
-        # 9. 使用门控机制融合特征
-        gate_weights = torch.sigmoid(torch.cat([attn_output, llm_embedding_projected, query], dim=-1))  # shape: [seq_len, 3*seq_input_embed]
-        gate_weights = gate_weights.view(-1, 3, args.seq_input_embed)  # shape: [seq_len, 3, seq_input_embed]
-        
-        # 加权融合
-        final_features = gate_weights[:, 0] * attn_output + gate_weights[:, 1] * llm_embedding_projected + gate_weights[:, 2] * query  # shape: [seq_len, seq_input_embed]
-        
-        # 添加层归一化
-        layer_norm = nn.LayerNorm(args.seq_input_embed).to(args.device)
-        final_features = layer_norm(final_features)  # shape: [seq_len, seq_input_embed]
+        # 使用全局定义的归一化层
+        final_features = layer_norm(attn_output)  # shape: [seq_len, seq_input_embed]
 
-        ## todo:final_features是一条轨迹编码的信息,都会送给transformer进行预测,所以上述过程需要辩证看待,可以提出对应的改进建议.
         return final_features
 
 
@@ -510,6 +465,8 @@ The predicted next location category is: """
     embed_fuse_model2 = embed_fuse_model2.to(device=args.device)
     align_layer = align_layer.to(device=args.device)
     seq_model = seq_model.to(device=args.device)
+    multihead_attn = multihead_attn.to(device=args.device)
+    layer_norm = layer_norm.to(device=args.device)
 
     # %% Loop epoch
     # For plotting
@@ -554,6 +511,8 @@ The predicted next location category is: """
         embed_fuse_model2.train()
         align_layer.train()
         seq_model.train()
+        multihead_attn.train()
+        layer_norm.train()
 
         train_batches_top1_acc_list = []
         train_batches_top5_acc_list = []
@@ -752,6 +711,9 @@ The predicted next location category is: """
         embed_fuse_model2.eval()
         align_layer.eval()
         seq_model.eval()
+        multihead_attn.eval()
+        layer_norm.eval()
+
 
         val_batches_top1_acc_list = []
         val_batches_top5_acc_list = []
@@ -1020,41 +982,10 @@ The predicted next location category is: """
                      f"val_recall20:{epoch_val_recall20:.4f}"
                      )
 
-
-        # Save poi and user embeddings
-        if args.save_embeds:
-            embeddings_save_dir = os.path.join(args.save_dir, 'embeddings')
-            if not os.path.exists(embeddings_save_dir): os.makedirs(embeddings_save_dir)
-            if monitor_score >= max_val_score:
-                user_embedding_list = []
-                for user_idx in range(len(user_id2idx_dict)):
-                    input = torch.LongTensor([user_idx]).to(device=args.device)
-                    user_embedding = user_embed_model(input).detach().cpu().numpy().flatten()
-                    user_embedding_list.append(user_embedding)
-                user_embeddings = np.array(user_embedding_list)
-                np.save(os.path.join(embeddings_save_dir, 'saved_user_embeddings'), user_embeddings)
-                time_embedding_list = []
-                for time_idx in range(args.time_units):
-                    input = torch.FloatTensor([time_idx]).to(device=args.device)
-                    time_embedding = time_embed_model(input).detach().cpu().numpy().flatten()
-                    time_embedding_list.append(time_embedding)
-                time_embeddings = np.array(time_embedding_list)
-                np.save(os.path.join(embeddings_save_dir, 'saved_time_embeddings'), time_embeddings)
-
         # Save model state dict
         if args.save_weights:
             state_dict = {
                 'epoch': epoch,
-                'poi_embed_state_dict': poi_embed_model.state_dict(),
-                'user_embed_state_dict': user_embed_model.state_dict(),
-                'time_embed_state_dict': time_embed_model.state_dict(),
-                'cat_embed_state_dict': cat_embed_model.state_dict(),
-                'embed_fuse2_state_dict': embed_fuse_model2.state_dict(),
-                'seq_model_state_dict': seq_model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'user_id2idx_dict': user_id2idx_dict,
-                'poi_id2idx_dict': poi_id2idx_dict,
-                'args': args,
                 'epoch_train_metrics': {
                     'epoch_train_loss': epoch_train_loss,
                     'epoch_train_poi_loss': epoch_train_poi_loss,

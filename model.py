@@ -457,9 +457,6 @@ class TransformerModel(nn.Module):
 #     return prediction
 
 class GatingNetwork(nn.Module):
-
-
-
     def __init__(self, input_dim, hidden_dim):
         super(GatingNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
@@ -473,3 +470,73 @@ class GatingNetwork(nn.Module):
         x = self.fc2(x)
         x = self.sigmoid(x)
         return x
+
+
+# class LLMFeatureExtractor:
+#     def __init__(self, model_type="llama3", device="cuda"):
+#         self.model_type = model_type
+#         self.device = device
+#         if model_type == "nomic-embed-text":
+#             self.model_url = "http://localhost:11434/api/embeddings"
+#         else:
+#             self.model_url = "http://localhost:11434/api/generate"
+#
+#     def get_embedding(self, prompt, poi_embed_model=None):
+#         try:
+#             if self.model_type == "nomic-embed-text":
+#                 response = requests.post(
+#                     self.model_url,
+#                     json={
+#                         "model": "nomic-embed-text",
+#                         "prompt": prompt
+#                     }
+#                 )
+#                 if response.status_code == 200:
+#                     return response.json()["embedding"]
+#                 else:
+#                     print(f"Error getting embedding: {response.status_code}")
+#                     return None
+#             # TODO:大模型输出不一定是id,而是一段文字所以可能会出现问题,还有输入部分时间是被处理的,他是一个数字,
+#             # 比如0.8表示的是19:00,所以需要处理,另外day其实是星期数,所以需要处理,给大模型强调一定要输出类别,所以需要给大模型建立知识库,这里打算用dify,启动dify,建立知识库限定大模型只能从这个知识库里面的类别里面找
+#             elif self.model_type == "llama3":
+#                 response = requests.post(
+#                     self.model_url,
+#                     json={
+#                         "model": "llama3.1",
+#                         "prompt": prompt,
+#                         "stream": False
+#                     }
+#                 )
+#                 if response.status_code == 200:
+#                     response_data = response.json()
+#                     predicted_category = response_data.get("response", "").strip()
+#                     poi_id = self._category_to_poi_id(predicted_category)
+#                     if poi_embed_model is not None:
+#                         return poi_embed_model.get_embedding(poi_id)
+#                     return None
+#                 else:
+#                     print(f"Error getting response: {response.status_code}")
+#                     print(f"Response content: {response.text}")
+#                     return None
+#         except Exception as e:
+#             print(f"Error in get_embedding: {str(e)}")
+#             return None
+#
+#     def _category_to_poi_id(self, category):
+#         """Convert category name to POI ID using existing dictionaries"""
+#         try:
+#             # 首先尝试在cat_name2id_dict中查找
+#             if category in cat_name2id_dict:
+#                 return cat_name2id_dict[category]
+#
+#             # 如果找不到，尝试在category_name2id_dict中查找
+#             if category in category_name2id_dict:
+#                 return category_name2id_dict[category]
+#
+#             # 如果都找不到，打印警告并返回默认值
+#             print(f"Warning: Category '{category}' not found in dictionaries")
+#             return 0
+#
+#         except Exception as e:
+#             print(f"Error in _category_to_poi_id: {e}")
+#             return 0

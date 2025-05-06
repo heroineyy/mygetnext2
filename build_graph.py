@@ -139,14 +139,14 @@ def print_graph_statisics(G):
 
 
 if __name__ == '__main__':
-    dst_dir = r'dataset/NYC/my'
+    dst_dir = r'dataset/NYC'
 
     # Build POI checkin trajectory graph
-    train_df = pd.read_csv(os.path.join(dst_dir, 'nyc_train.csv'))
+    train_df = pd.read_csv(os.path.join(dst_dir, 'NYC_train_with_categories.csv'))
     print('Build global POI checkin graph -----------------------------------')
     G = build_global_POI_checkin_graph(train_df)
 
     # Save graph to disk
-    save_graph_to_pickle(G, dst_dir=dst_dir)
+    # save_graph_to_pickle(G, dst_dir=dst_dir)
     save_graph_to_csv(G, dst_dir=dst_dir)
-    save_graph_edgelist(G, dst_dir=dst_dir)
+    # save_graph_edgelist(G, dst_dir=dst_dir)
