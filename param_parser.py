@@ -58,6 +58,10 @@ def parameter_parser():
                         type=int,
                         default=128,
                         help='User embedding dimensions')
+    parser.add_argument('--gating-hidden-dim',
+                        type=int,
+                        default=128,
+                        help='gating-hidden-dim')
     parser.add_argument('--time-embed-dim',
                         type=int,
                         default=32,

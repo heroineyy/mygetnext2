@@ -457,6 +457,9 @@ class TransformerModel(nn.Module):
 #     return prediction
 
 class GatingNetwork(nn.Module):
+
+
+
     def __init__(self, input_dim, hidden_dim):
         super(GatingNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)

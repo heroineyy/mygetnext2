@@ -31,139 +31,7 @@ from utils import increment_path, calculate_laplacian_matrix, zipdir, top_k_acc_
 
 
 
-class TrajectoryKnowledgeBase:
-    def __init__(self):
-        self.trajectories = []  # 存储所有轨迹
-        self.category_patterns = {}  # 存储类别模式
-        self.location_patterns = {}  # 存储位置模式
-        self.time_patterns = {}  # 存储时间模式
-    
-    def add_trajectory(self, trajectory):
-        """添加一条轨迹到知识库"""
-        self.trajectories.append(trajectory)
-        
-        # 更新模式统计
-        for i in range(len(trajectory)-1):
-            current_cat = trajectory[i]['category']
-            next_cat = trajectory[i+1]['category']
-            if current_cat not in self.category_patterns:
-                self.category_patterns[current_cat] = {}
-            self.category_patterns[current_cat][next_cat] = self.category_patterns[current_cat].get(next_cat, 0) + 1
-            
-            # 更新位置模式
-            current_loc = (trajectory[i]['lat'], trajectory[i]['lon'])
-            next_loc = (trajectory[i+1]['lat'], trajectory[i+1]['lon'])
-            if current_loc not in self.location_patterns:
-                self.location_patterns[current_loc] = {}
-            self.location_patterns[current_loc][next_loc] = self.location_patterns[current_loc].get(next_loc, 0) + 1
-            
-            # 更新时间模式
-            current_time = trajectory[i]['time']
-            next_time = trajectory[i+1]['time']
-            if current_time not in self.time_patterns:
-                self.time_patterns[current_time] = {}
-            self.time_patterns[current_time][next_time] = self.time_patterns[current_time].get(next_time, 0) + 1
-    
-    def find_similar_trajectories(self, current_trajectory, top_k=5):
-        """查找与当前轨迹最相似的轨迹"""
-        similarities = []
-        for traj in self.trajectories:
-            # 计算轨迹相似度（可以根据需要实现不同的相似度计算方法）
-            similarity = self._calculate_trajectory_similarity(current_trajectory, traj)
-            similarities.append((traj, similarity))
-        
-        # 返回最相似的k条轨迹
-        return sorted(similarities, key=lambda x: x[1], reverse=True)[:top_k]
-    
-    def _calculate_trajectory_similarity(self, traj1, traj2):
-        """计算两条轨迹的相似度"""
-        # 这里可以实现不同的相似度计算方法
-        # 例如：基于类别序列的相似度、基于地理位置的相似度、基于时间的相似度等
-        category_sim = self._calculate_category_similarity(traj1, traj2)
-        location_sim = self._calculate_location_similarity(traj1, traj2)
-        time_sim = self._calculate_time_similarity(traj1, traj2)
-        
-        # 综合相似度
-        return 0.4 * category_sim + 0.4 * location_sim + 0.2 * time_sim
-    
-    def _calculate_category_similarity(self, traj1, traj2):
-        """计算类别序列相似度"""
-        # 实现类别序列相似度计算
-        pass
-    
-    def _calculate_location_similarity(self, traj1, traj2):
-        """计算地理位置相似度"""
-        # 实现地理位置相似度计算
-        pass
-    
-    def _calculate_time_similarity(self, traj1, traj2):
-        """计算时间相似度"""
-        # 实现时间相似度计算
-        pass
 
-class LLMFeatureExtractor(nn.Module):
-    def __init__(self, model_url="http://localhost:11434/api/embeddings", knowledge_base=None):
-        super().__init__()
-        self.model_url = model_url
-        self.knowledge_base = knowledge_base or TrajectoryKnowledgeBase()
-    
-    def get_embedding(self, text):
-        """Get embedding from local nomic-embed-text model with RAG"""
-        try:
-            # 解析当前轨迹
-            current_trajectory = self._parse_trajectory(text)
-            
-            # 从知识库中检索相似轨迹
-            similar_trajectories = self.knowledge_base.find_similar_trajectories(current_trajectory)
-            
-            # 构建增强的提示词
-            enhanced_prompt = self._build_enhanced_prompt(text, similar_trajectories)
-            
-            # 获取嵌入
-            response = requests.post(
-                self.model_url,
-                json={
-                    "model": "nomic-embed-text",
-                    "prompt": enhanced_prompt
-                }
-            )
-            if response.status_code == 200:
-                return torch.tensor(response.json()["embedding"], device=args.device)
-            else:
-                print(f"Error getting embedding: {response.status_code}")
-                return None
-        except Exception as e:
-            print(f"Exception in get_embedding: {e}")
-            return None
-    
-    def _parse_trajectory(self, text):
-        """解析轨迹文本为结构化数据"""
-        trajectory = []
-        lines = text.split('\n')
-        for line in lines:
-            if line.startswith('Visit'):
-                parts = line.split(',')
-                visit_info = {
-                    'category': parts[0].split(':')[1].strip().split('(')[0].strip(),
-                    'time': float(parts[1].split(':')[1].strip()),
-                    'day': int(parts[2].split(':')[1].strip()),
-                    'lat': float(parts[3].split('(')[1].split(',')[0]),
-                    'lon': float(parts[3].split(',')[1].split(')')[0])
-                }
-                trajectory.append(visit_info)
-        return trajectory
-    
-    def _build_enhanced_prompt(self, original_prompt, similar_trajectories):
-        """构建增强的提示词"""
-        enhanced_prompt = original_prompt + "\n\nSimilar Trajectories:\n"
-        
-        for traj, similarity in similar_trajectories:
-            enhanced_prompt += f"\nSimilarity Score: {similarity:.2f}\n"
-            for visit in traj:
-                enhanced_prompt += f"Visit: {visit['category']}, Time: {visit['time']}, Day: {visit['day']}, Location: ({visit['lat']}, {visit['lon']})\n"
-        
-        enhanced_prompt += "\nBased on both the current trajectory and similar historical trajectories, predict the next most likely location category to visit. Only respond with the category name."
-        return enhanced_prompt
 
 def train(args):
     args.save_dir = increment_path(Path(args.project) / args.name, exist_ok=args.exist_ok, sep='-')
@@ -275,8 +143,8 @@ def train(args):
             self.input_seqs = []
             self.label_seqs = []
 
-            # 生成缓存文件名
-            cache_path = f"cache_trajectory_train_{hashlib.md5(str(train_df['trajectory_id'].tolist()).encode()).hexdigest()}.pkl"
+# 生成缓存文件名
+            cache_path = os.path.join('dataset', f"cache_trajectory_train_{hashlib.md5(str(train_df['trajectory_id'].tolist()).encode()).hexdigest()}.pkl")
             
             # 如果缓存存在，直接加载
             if os.path.exists(cache_path):
@@ -336,8 +204,8 @@ def train(args):
             self.input_seqs = []
             self.label_seqs = []
 
-            # 生成缓存文件名
-            cache_path = f"cache_trajectory_val_{hashlib.md5(str(df['trajectory_id'].tolist()).encode()).hexdigest()}.pkl"
+
+            cache_path = os.path.join('dataset', f"cache_trajectory_val_{hashlib.md5(str(df['trajectory_id'].tolist()).encode()).hexdigest()}.pkl")
             
             # 如果缓存存在，直接加载
             if os.path.exists(cache_path):
@@ -438,14 +306,15 @@ def train(args):
 
 
     # %% Model2: User embedding model,
+    num_weeks = 7
     user_embed_model = GenericEmbeddings(num_users, args.user_embed_dim)
     poi_embed_model = GenericEmbeddings(num_pois, args.poi_embed_dim)
-    week_embed_model = GenericEmbeddings(7, args.week_embed_dim)
     cat_embed_model = GenericEmbeddings(num_cats, args.cat_embed_dim)
     categroy_embed_model = GenericEmbeddings(num_categroys, args.cat2_embed_dim)
 
-    # %% Model3: Time Model
+    # %% Model3: Time week lat lon Model
     time_embed_model = Time2Vec('sin', out_dim=args.time_embed_dim)
+    week_embed_model = GenericEmbeddings(num_weeks, args.week_embed_dim)
     lat_embed_model = Time2Vec('sin', out_dim=args.geo_embed_dim)
     lon_embed_model = Time2Vec('sin', out_dim=args.geo_embed_dim)
 
@@ -463,10 +332,11 @@ def train(args):
                                  args.transformer_nlayers,
                                  dropout=args.transformer_dropout)
 
-    gating_hidden_dim =128
-    embed_fuse_model2 = GatingNetwork(args.seq_input_embed2, gating_hidden_dim).to(args.device)
+    embed_fuse_model2 = GatingNetwork(args.seq_input_embed, args.gating_hidden_dim).to(args.device)
 
-    align_layer = nn.Linear(args.seq_input_embed3, args.seq_input_embed).to(args.device)
+    align_layer = nn.Linear(args.seq_input_embed3, args.seq_input_embed).to(args.device) # 将seq_input_embed3线性转换为seq_input_embed,对齐
+
+    # 这里可能需要改进
 
     llm_extractor = LLMFeatureExtractor()
 
@@ -505,14 +375,28 @@ def train(args):
         embedding = embed_model(input_tensor)
         return torch.squeeze(embedding).to(device=device)
 
-    def create_dify_prompt(input_seq_cat_name, input_seq_category_name, input_seq_time, input_seq_week, input_seq_lat, input_seq_lon):
+    def create_trajectory_prompt(input_seq_cat_name, input_seq_category_name, input_seq_time, input_seq_week, input_seq_lat,
+                           input_seq_lon):
         """Build enhanced prompts for trajectory encoding"""
-        prompt = "User Trajectory:\n"
-        for i, (cat, cat2, time, week, lat, lon) in enumerate(zip(input_seq_cat_name, input_seq_category_name, input_seq_time, input_seq_week, input_seq_lat, input_seq_lon)):
-            prompt += f"Visit {i+1}: {cat} ({cat2}), Time: {time}, Day: {week}, Location: ({lat}, {lon})\n"
-        prompt += "\nBased on this trajectory pattern, predict the next most likely location category to visit. Only respond with the category name."
-        return prompt
+        prompt = """Please analyze the following user trajectory and predict the next most likely location category to visit.
 
+Trajectory Details:
+"""
+        for i, (cat, cat2, time, week, lat, lon) in enumerate(
+                zip(input_seq_cat_name, input_seq_category_name, input_seq_time, input_seq_week, input_seq_lat,
+                    input_seq_lon)):
+            prompt += f"Visit {i + 1}: {cat} ({cat2})\n"
+            prompt += f"Time: {time}, Day: {week}\n"
+            prompt += f"Location: ({lat}, {lon})\n\n"
+
+        prompt += """Based on the above trajectory pattern, predict the next most likely location category the user will visit.
+Notes:
+1. Return only the category name, without any additional text
+2. The category name must match the format of previous categories
+3. Consider the influence of time, day of week, and location information
+
+The predicted next location category is: """
+        return prompt
 
 
     def input_traj_to_embeddings(sample, poi_gcn_embeddings):
@@ -530,19 +414,16 @@ def train(args):
         input_seq_category_name = [poi_idx2category_name_dict[each] for each in input_seq]
 
         # Create enhanced prompt
-        prompt = create_dify_prompt(input_seq_cat_name, input_seq_category_name, input_seq_time, input_seq_week, input_seq_lat, input_seq_lon)
+        prompt = create_trajectory_prompt(input_seq_cat_name, input_seq_category_name, input_seq_time, input_seq_week, input_seq_lat, input_seq_lon)
 
-        # 1. 处理 LLM embedding
-        # TODO:这里改用预训练的大语言模型,构建数据集,引导模型输出类型,标签的类型做语义相似度的损失计算,即构建prompt,微调大模型,大模型根据用户历史轨迹输出类型,类型用bert编码,和标签类别编码求对比损失?
-        # TODO:另外想一个办法离线存储大模型编码的信息,下次加载就不需要重复计算
-        # llm_extractor可以重新设计,添加
-        #
+        # todo:llm_extractor.get_embedding设计可以传递两个参数,除了prompt外,还有可选模型,所以llm_extractor.get_embedding需要重新构造,可选nomic-embed-text model或者llama3.1,
+        #  当然llama3.1是语言模型,所以一定要限制他只输出poi-id,那么和nomic-embed-text不同,我们需要再调用poi_embed_model把它转换成向量,
+        #  或者选用其他的办法,无论如何让这里的最终的目的是借用llm提取轨迹的语义
 
-        llm_embedding = llm_extractor.get_embedding(prompt)  # shape: [768]
+        llm_embedding = llm_extractor.get_embedding(prompt, poi_embed_model)
         if llm_embedding is None:
             llm_embedding = torch.zeros(768, device=args.device)
-
-        # todo:投影可能出现损失
+        
         # 2. 将 LLM embedding 直接投影到 seq_input_embed 维度
         llm_projection = nn.Linear(768, args.seq_input_embed).to(args.device)
         llm_embedding_projected = llm_projection(llm_embedding)  # shape: [seq_input_embed]
@@ -552,15 +433,10 @@ def train(args):
         user_embedding = get_embedding(user_id2idx_dict[user_id], user_embed_model, args.device)  # shape: [user_embed_dim]
         
         # 4. 获取最后一个点的时空信息
-        last_seq_time = sample[2][-1][1]
-        last_seq_lat = np.radians(sample[2][-1][2])
-        last_seq_lon = np.radians(sample[2][-1][3])
-        last_seq_week = sample[2][-1][4]
-        
-        last_time_embedding = get_embedding(last_seq_time, time_embed_model, args.device, is_numeric=True)  # shape: [time_embed_dim]
-        last_lat_embedding = get_embedding(last_seq_lat, lat_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
-        last_lon_embedding = get_embedding(last_seq_lon, lon_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
-        last_week_embedding = get_embedding(last_seq_week, week_embed_model, args.device)  # shape: [week_embed_dim]
+        last_time_embedding = get_embedding(sample[2][-1][1], time_embed_model, args.device, is_numeric=True)  # shape: [time_embed_dim]
+        last_lat_embedding = get_embedding(np.radians(sample[2][-1][2]), lat_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
+        last_lon_embedding = get_embedding(np.radians(sample[2][-1][3]), lon_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
+        last_week_embedding = get_embedding(sample[2][-1][4], week_embed_model, args.device)  # shape: [week_embed_dim]
         
         last_st_embeddingq = torch.cat((last_time_embedding, last_lat_embedding, last_lon_embedding, last_week_embedding), dim=-1)  # shape: [time_embed_dim + 2*geo_embed_dim + week_embed_dim]
         aligned_last_st_embedding = align_layer(last_st_embeddingq)  # shape: [seq_input_embed]
@@ -571,6 +447,11 @@ def train(args):
             # 获取 GCN embedding
             poi_gcn_embedding = poi_gcn_embeddings[input_seq[idx]]  # shape: [poi_embed_dim]
             poi_gcn_embedding = torch.squeeze(poi_gcn_embedding).to(device=args.device)
+
+            poi_embedding = get_embedding(input_seq[idx], poi_embed_model, args.device)
+
+            #todo:融合poi_embedding,poi_gcn_embedding,设计一个函数可以选择加权融合,或者直接cat加线性称对其到poi_gcn_embedding的维度,或者乘积融合,输出fused_poi_embedding
+            fused_poi_embedding = poi_embedding + poi_gcn_embedding
             
             # 获取时空特征
             time_embedding = get_embedding(input_seq_time[idx], time_embed_model, args.device, is_numeric=True)  # shape: [time_embed_dim]
@@ -581,17 +462,11 @@ def train(args):
             cat2_embedding = get_embedding(input_seq_category[idx], categroy_embed_model, args.device)  # shape: [cat2_embed_dim]
             
             # 融合时空特征
-            st_features = torch.cat([time_embedding, week_embedding, lat_embedding, lon_embedding, cat_embedding, cat2_embedding], dim=-1)  # shape: [time_embed_dim + week_embed_dim + 2*geo_embed_dim + cat_embed_dim + cat2_embed_dim]
-            gate_values = embed_fuse_model2(st_features)  # shape: [time_embed_dim + week_embed_dim + 2*geo_embed_dim + cat_embed_dim + cat2_embed_dim]
-            gated_st_features = st_features * gate_values  # shape: [time_embed_dim + week_embed_dim + 2*geo_embed_dim + cat_embed_dim + cat2_embed_dim]
-            
-            # 融合用户、POI和时空特征
-            fused_embedding = torch.cat([
-                user_embedding,  # [user_embed_dim]
-                poi_gcn_embedding,  # [poi_embed_dim]
-                gated_st_features  # [time_embed_dim + week_embed_dim + 2*geo_embed_dim + cat_embed_dim + cat2_embed_dim]
-            ], dim=-1)  # shape: [seq_input_embed]
-            input_seq_embed.append(fused_embedding)
+            st_features = torch.cat([user_embedding, fused_poi_embedding, time_embedding, week_embedding, lat_embedding, lon_embedding, cat_embedding, cat2_embedding], dim=-1)   # shape: [seq_input_embed]
+            gate_values = embed_fuse_model2(st_features)   # shape: [seq_input_embed]
+            gated_st_features = st_features * gate_values  # shape: [seq_input_embed]
+
+            input_seq_embed.append(gated_st_features)
         
         # 6. 使用注意力机制融合序列特征和最后一个点的时空信息
         input_seq_embed = torch.stack(input_seq_embed, dim=0)  # shape: [seq_len, seq_input_embed]
@@ -617,7 +492,8 @@ def train(args):
         # 添加层归一化
         layer_norm = nn.LayerNorm(args.seq_input_embed).to(args.device)
         final_features = layer_norm(final_features)  # shape: [seq_len, seq_input_embed]
-        
+
+        ## todo:final_features是一条轨迹编码的信息,都会送给transformer进行预测,所以上述过程需要辩证看待,可以提出对应的改进建议.
         return final_features
 
 
@@ -758,6 +634,7 @@ def train(args):
             y_week = label_padded_week.to(device=args.device, dtype=torch.long)
             y_cat = label_padded_cat.to(device=args.device, dtype=torch.long)
             y_categroy = label_padded_categroy.to(device=args.device, dtype=torch.long)
+            # todo:主要还是为了预测下一个poi点,所以需要批判性分析loss_time , loss_cat +loss_lat,loss_lon ,loss_categroy , loss_week是否有必要
             y_pred_poi, y_pred_time, y_pred_lat, y_pred_lon, y_pred_cat, y_pred_categroy ,y_pred_week = seq_model(x, src_mask)
 
             loss_poi = criterion_poi(y_pred_poi.transpose(1, 2), y_poi)
@@ -1256,17 +1133,4 @@ if __name__ == '__main__':
     args.feature3 = 'latitude'
     args.feature4 = 'longitude'
     train(args)
-
-
-# 1 计算签到数据的星期,时间段, 对数据集按用户进行划分,按照星期得到用户的周轨迹,按照时间段筛选出用户的天轨迹,比如用户在星期一的签到数据集合,学到用户在星期一的兴趣偏好,在晚上的签到集合学到用户在晚上的兴趣偏好,(这里需要想想应该怎么通过轨迹数据对其编码)
-# 2 这样一个用户有7+3个特征(周一~周天,白天,中午,晚上)
-# 3 对于一条轨迹上的每一个签到点,根据签到点的星期和时间段拿到用户学到的特定时间偏好特征(星期偏好 时间段偏好),因此在输入给transformer前的n-1个签到点(因为轨迹的最后一个poi点作为标签)的特征就包括了(地点类别编码 时间编码 地理编码 用户编码 用户星期偏好 用户时间段偏好),
-# 4 为了让transformer更好的预测下一个兴趣点,输出除了下一个兴趣点的id还应该输出访问该点的用户的星期偏好,时间段偏好,所以我们需要transformer模型输出的用户的星期偏好/时间段偏好和标签的用户的星期偏好/时间段偏好作余弦相似度计算求损失(这样不知道对不对,反正损失需要单独设计)
-
-
-# 上述太复杂了,更重要的是学加入周的维度(已经做了)
-# 2 重新构建poi图,poi之间建立关系可以通过地理位置加强联系(已经做了)
-
-# 加入大语言模型进行编码(提示词工程)(todo)
-# 数据集质量 学习率
 
