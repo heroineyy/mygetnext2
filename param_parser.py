@@ -170,5 +170,9 @@ def parameter_parser():
                         type=int,
                         default=64973,
                         help='python console use only')
-
+    parser.add_argument('--fuse_way', type=str, default='adaptive',
+                      choices=['adaptive', 'concat', 'manual'],
+                      help='POI特征融合方式: adaptive(自适应权重), concat(拼接对齐), manual(手动加权)')
+    parser.add_argument('--similar_user_k', type=int, default=5,
+                      help='相似用户数量')
     return parser.parse_args()

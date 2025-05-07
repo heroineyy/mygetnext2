@@ -1,10 +1,14 @@
+from collections import defaultdict
 import glob
+import hashlib
 import math
 import os
+import pickle
 import re
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.backends.cudnn as cudnn
 from scipy.sparse.linalg import eigsh
@@ -199,40 +203,96 @@ def recall_metric_last_timestep(label_pois, pred_pois, k=20):
     return retrieved_relevant / total_relevant
 
 
-def compute_last_position_loss(predictions, targets, batch_seq_lens,type=None):
-    """
-    向量化实现的版本，效率更高
-    """
-    if type == 'time':
-        criterion = maksed_mse_loss
-    else:
-        criterion = nn.CrossEntropyLoss(ignore_index=-1)
+def calculate_prediction_stability(top1_accs, top5_accs, mrrs):
+    """计算预测稳定性分数"""
+    # 计算各个指标的标准差
+    top1_std = np.std(top1_accs)
+    top5_std = np.std(top5_accs)
+    mrr_std = np.std(mrrs)
+    
+    # 计算稳定性分数 (1 - 归一化的标准差)
+    stability = 1 - (top1_std + top5_std + mrr_std) / 3
+    return max(0, stability)  # 确保非负
 
-    # 确保batch_seq_lens是torch.Tensor
-    if isinstance(batch_seq_lens, list):
-        batch_seq_lens = torch.tensor(batch_seq_lens, device=predictions.device)
+def calculate_loss_balance(poi_loss, time_loss, cat_loss):
+    """计算损失平衡性分数"""
+    # 计算各个损失的相对比例
+    total_loss = poi_loss + time_loss + cat_loss
+    poi_ratio = poi_loss / total_loss
+    time_ratio = time_loss / total_loss
+    cat_ratio = cat_loss / total_loss
+    
+    # 计算与理想平衡状态(1/3)的偏差
+    ideal_ratio = 1/3
+    balance = 1 - (abs(poi_ratio - ideal_ratio) + 
+                  abs(time_ratio - ideal_ratio) + 
+                  abs(cat_ratio - ideal_ratio)) / 2
+    
+    return max(0, balance)  # 确保非负
 
-    batch_size, max_seq_len = targets.shape
-    device = predictions.device
+def calculate_user_cooccurrence(train_df):
+    """计算用户共现矩阵,带缓存机制"""
+    # 生成缓存文件名
+    cache_path = os.path.join('dataset', f"cache_cooccurrence_{hashlib.md5(str(train_df['user_id'].tolist()).encode()).hexdigest()}.pkl")
+    
+    # 如果缓存存在,直接加载
+    if os.path.exists(cache_path):
+        with open(cache_path, 'rb') as f:
+            return pickle.load(f)
 
-    # 创建范围索引 [0, 1, 2, ..., max_seq_len-1]
-    range_tensor = torch.arange(max_seq_len, device=device).expand(batch_size, -1)
-
-    # 创建掩码：位置 == seq_len-1
-    mask = (range_tensor == (batch_seq_lens - 1).unsqueeze(1))
-
-    # 应用掩码获取最后一个位置的预测
-    last_predictions = predictions[mask]  # [batch_size, num_pois]
-
-    # 获取要预测的下一个POI
-    # 首先创建一个索引张量，形状为[batch_size, 1]
-    gather_indices = batch_seq_lens.unsqueeze(1)  # [batch_size, 1]
-
-    # 确保索引不越界
-    gather_indices = torch.clamp(gather_indices, 0, max_seq_len - 1)
-
-    last_targets = targets.gather(1, gather_indices).squeeze(1)  # [batch_size]
-
-    # 计算损失
-    loss = criterion(last_predictions, last_targets)
-    return loss
+    user_ids = [each for each in list(set(train_df['user_id'].to_list()))]
+    user_id2idx_dict = dict(zip(user_ids, range(len(user_ids))))
+    
+    # 否则计算共现矩阵
+    # 1. 按时间区间和POI类别统计用户共现
+    train_df['time_interval'] = pd.to_datetime(train_df['local_time']).dt.floor('1H')
+    
+    # 计算POI类别和POI细分类别的共现
+    co_occurrence_catname = train_df.groupby(['time_interval', 'POI_catname'])['user_id'].nunique()
+    co_occurrence_category = train_df.groupby(['time_interval', 'POI_category'])['user_id'].nunique()
+    
+    # 筛选有效共现
+    co_occurrence_catname = co_occurrence_catname[co_occurrence_catname > 1]
+    co_occurrence_category = co_occurrence_category[co_occurrence_category > 1]
+    
+    # 2. 计算用户对共现频率
+    user_pairs = defaultdict(int)
+    for (time_interval, category), _ in co_occurrence_catname.items():
+        users = train_df[(train_df['time_interval'] == time_interval) & 
+                        (train_df['POI_catname'] == category)]['user_id'].unique()
+        for i in range(len(users)):
+            for j in range(i + 1, len(users)):
+                user_pairs[(users[i], users[j])] += 1
+                
+    for (time_interval, category), _ in co_occurrence_category.items():
+        users = train_df[(train_df['time_interval'] == time_interval) & 
+                        (train_df['POI_category'] == category)]['user_id'].unique()
+        for i in range(len(users)):
+            for j in range(i + 1, len(users)):
+                user_pairs[(users[i], users[j])] += 1
+    
+    # 3. 计算用户活跃度
+    user_activity = train_df['user_id'].value_counts().to_dict()
+    
+    # 4. 计算归一化共现矩阵
+    num_users = len(user_activity)
+    cooccurrence_matrix = torch.zeros((num_users, num_users))
+    
+    for (user1, user2), freq in user_pairs.items():
+        # 使用Jaccard相似度进行归一化
+        activity1 = user_activity[user1]
+        activity2 = user_activity[user2]
+        similarity = freq / (activity1 + activity2 - freq)
+        
+        # 转换为索引
+        idx1 = user_id2idx_dict[user1]
+        idx2 = user_id2idx_dict[user2]
+        cooccurrence_matrix[idx1, idx2] = similarity
+        cooccurrence_matrix[idx2, idx1] = similarity
+    
+    # 保存到缓存
+    os.makedirs('dataset', exist_ok=True)
+    with open(cache_path, 'wb') as f:
+        pickle.dump(cooccurrence_matrix, f)
+        
+    return cooccurrence_matrix

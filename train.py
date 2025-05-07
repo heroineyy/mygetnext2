@@ -22,14 +22,14 @@ import torch.nn.functional as F
 import hashlib
 import requests
 import json
+from collections import defaultdict
 
 from dataloader import load_graph_adj_mtx, load_graph_node_features
-from model import GCN, GenericEmbeddings,Time2Vec, GatingNetwork,TransformerModel
+from model import GCN, GenericEmbeddings,Time2Vec, GatingNetwork,TransformerModel, POIFeatureFusion,EnhancedUserEmbedding
 from param_parser import parameter_parser
 from utils import increment_path, calculate_laplacian_matrix, zipdir, top_k_acc_last_timestep, \
-    mAP_metric_last_timestep, MRR_metric_last_timestep, maksed_mse_loss, NDCG_metric_last_timestep, recall_metric_last_timestep
-
-
+    mAP_metric_last_timestep, MRR_metric_last_timestep, maksed_mse_loss, NDCG_metric_last_timestep,\
+    recall_metric_last_timestep,calculate_user_cooccurrence,calculate_prediction_stability,calculate_loss_balance
 
 
 
@@ -66,6 +66,7 @@ def train(args):
     # Read check-in train data
     train_df = pd.read_csv(args.data_train)
     val_df = pd.read_csv(args.data_val)
+
 
     # Build POI graph (built from train_df)
     print('Loading POI graph...')
@@ -274,6 +275,7 @@ def train(args):
         def __getitem__(self, index):
             return (self.traj_seqs[index], self.input_seqs[index], self.label_seqs[index])
 
+    cooccurrence_matrix = calculate_user_cooccurrence(train_df).to(args.device)
     # %% ====================== Define dataloader ======================
     print('Prepare dataloader...')
     train_dataset = TrajectoryDatasetTrain(train_df)
@@ -305,16 +307,19 @@ def train(args):
                           dropout=args.gcn_dropout)
 
 
-    # %% Model2: User embedding model,
-    num_weeks = 7
-    user_embed_model = GenericEmbeddings(num_users, args.user_embed_dim)
+    # %% Model2: User embedding model
+    user_embed_model = EnhancedUserEmbedding(num_users,args.user_embed_dim,cooccurrence_matrix,args.similar_user_k)
     poi_embed_model = GenericEmbeddings(num_pois, args.poi_embed_dim)
     cat_embed_model = GenericEmbeddings(num_cats, args.cat_embed_dim)
     categroy_embed_model = GenericEmbeddings(num_categroys, args.cat2_embed_dim)
 
+
+    # 初始化POI特征融合模块
+    poi_fusion = POIFeatureFusion(args.poi_embed_dim, args.fuse_way)
+
     # %% Model3: Time week lat lon Model
     time_embed_model = Time2Vec('sin', out_dim=args.time_embed_dim)
-    week_embed_model = GenericEmbeddings(num_weeks, args.week_embed_dim)
+    week_embed_model = GenericEmbeddings(7, args.week_embed_dim)
     lat_embed_model = Time2Vec('sin', out_dim=args.geo_embed_dim)
     lon_embed_model = Time2Vec('sin', out_dim=args.geo_embed_dim)
 
@@ -352,6 +357,7 @@ def train(args):
                                   list(align_layer.parameters()) +
                                   list(multihead_attn.parameters()) +
                                   list(layer_norm.parameters()) +
+                                  list(poi_fusion.parameters()) +
                                   list(seq_model.parameters()),
                            lr=args.lr,
                            weight_decay=args.weight_decay)
@@ -370,7 +376,7 @@ def train(args):
     # 封装嵌入转换函数，支持数值型和类别型特征
     def get_embedding(value, embed_model, device, is_numeric=False):
         dtype = torch.float if is_numeric else torch.long
-        input_tensor = torch.tensor([value], dtype=dtype).to(device=device)
+        input_tensor = torch.tensor(value, dtype=dtype).to(device=device)
         embedding = embed_model(input_tensor)
         return torch.squeeze(embedding).to(device=device)
 
@@ -401,10 +407,10 @@ def train(args):
         user_embedding = get_embedding(user_id2idx_dict[user_id], user_embed_model, args.device)  # shape: [user_embed_dim]
         
         # 4. 获取最后一个点的时空信息
-        last_time_embedding = get_embedding(sample[2][-1][1], time_embed_model, args.device, is_numeric=True)  # shape: [time_embed_dim]
-        last_lat_embedding = get_embedding(np.radians(sample[2][-1][2]), lat_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
-        last_lon_embedding = get_embedding(np.radians(sample[2][-1][3]), lon_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
-        last_week_embedding = get_embedding(sample[2][-1][4], week_embed_model, args.device)  # shape: [week_embed_dim]
+        last_time_embedding = get_embedding([sample[2][-1][1]], time_embed_model, args.device, is_numeric=True)  # shape: [time_embed_dim]
+        last_lat_embedding = get_embedding([np.radians(sample[2][-1][2])], lat_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
+        last_lon_embedding = get_embedding([np.radians(sample[2][-1][3])], lon_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
+        last_week_embedding = get_embedding([sample[2][-1][4]], week_embed_model, args.device)  # shape: [week_embed_dim]
         
         last_st_embeddingq = torch.cat((last_time_embedding, last_lat_embedding, last_lon_embedding, last_week_embedding), dim=-1)  # shape: [time_embed_dim + 2*geo_embed_dim + week_embed_dim]
         aligned_last_st_embedding = align_layer(last_st_embeddingq)  # shape: [seq_input_embed]
@@ -417,17 +423,17 @@ def train(args):
             poi_gcn_embedding = torch.squeeze(poi_gcn_embedding).to(device=args.device)
 
             poi_embedding = get_embedding(input_seq[idx], poi_embed_model, args.device)
-
-            #todo:融合poi_embedding,poi_gcn_embedding,设计一个函数可以选择加权融合,或者直接cat加线性称对其到poi_gcn_embedding的维度,或者乘积融合,输出fused_poi_embedding
-            fused_poi_embedding = poi_embedding + poi_gcn_embedding
+            
+            # 使用POI特征融合模块
+            fused_poi_embedding = poi_fusion(poi_embedding, poi_gcn_embedding)
             
             # 获取时空特征
-            time_embedding = get_embedding(input_seq_time[idx], time_embed_model, args.device, is_numeric=True)  # shape: [time_embed_dim]
-            lat_embedding = get_embedding(np.radians(input_seq_lat[idx]), lat_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
-            lon_embedding = get_embedding(np.radians(input_seq_lon[idx]), lon_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
-            week_embedding = get_embedding(input_seq_week[idx], week_embed_model, args.device)  # shape: [week_embed_dim]
-            cat_embedding = get_embedding(input_seq_cat[idx], cat_embed_model, args.device)  # shape: [cat_embed_dim]
-            cat2_embedding = get_embedding(input_seq_category[idx], categroy_embed_model, args.device)  # shape: [cat2_embed_dim]
+            time_embedding = get_embedding([input_seq_time[idx]], time_embed_model, args.device, is_numeric=True)  # shape: [time_embed_dim]
+            lat_embedding = get_embedding([np.radians(input_seq_lat[idx])], lat_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
+            lon_embedding = get_embedding([np.radians(input_seq_lon[idx])], lon_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
+            week_embedding = get_embedding([input_seq_week[idx]], week_embed_model, args.device)  # shape: [week_embed_dim]
+            cat_embedding = get_embedding([input_seq_cat[idx]], cat_embed_model, args.device)  # shape: [cat_embed_dim]
+            cat2_embedding = get_embedding([input_seq_category[idx]], categroy_embed_model, args.device)  # shape: [cat2_embed_dim]
             
             # 融合时空特征
             st_features = torch.cat([user_embedding, fused_poi_embedding, time_embedding, week_embedding, lat_embedding, lon_embedding, cat_embedding, cat2_embedding], dim=-1)   # shape: [seq_input_embed]
@@ -467,6 +473,7 @@ def train(args):
     seq_model = seq_model.to(device=args.device)
     multihead_attn = multihead_attn.to(device=args.device)
     layer_norm = layer_norm.to(device=args.device)
+    poi_fusion = poi_fusion.to(device=args.device)
 
     # %% Loop epoch
     # For plotting
@@ -513,6 +520,7 @@ def train(args):
         seq_model.train()
         multihead_attn.train()
         layer_norm.train()
+        poi_fusion.train()
 
         train_batches_top1_acc_list = []
         train_batches_top5_acc_list = []
@@ -713,6 +721,7 @@ def train(args):
         seq_model.eval()
         multihead_attn.eval()
         layer_norm.eval()
+        poi_fusion.eval()
 
 
         val_batches_top1_acc_list = []
@@ -854,7 +863,6 @@ def train(args):
             # Report validation progress
             if (vb_idx % (args.batch * 4)) == 0:
                 sample_idx = 0
-                batch_pred_pois_wo_attn = y_pred_poi.detach().cpu().numpy()
                 logging.info(f'Epoch:{epoch}, batch:{vb_idx}, '
                              f'val_batch_loss:{loss.item():.2f}, '
                              f'val_batch_top1_acc:{top1_acc / len(batch_label_pois):.2f}, '
@@ -948,10 +956,54 @@ def train(args):
         val_epochs_recall20_list.append(epoch_val_recall20)
 
         # Monitor loss and score
+        # 1. 基础指标评分
+        base_metrics = {
+            'top1_acc': epoch_val_top1_acc,
+            'top5_acc': epoch_val_top5_acc,
+            'top10_acc': epoch_val_top10_acc,
+            'top20_acc': epoch_val_top20_acc,
+            'mrr': epoch_val_mrr,
+            'ndcg20': epoch_val_ndcg20,
+            'recall20': epoch_val_recall20
+        }
+        
+        # 2. 计算综合评分
+        weights = {
+            'top1_acc': 0.3,    # 最相关预测的权重
+            'top5_acc': 0.2,    # 前5个预测的权重
+            'mrr': 0.2,         # 排序质量的权重
+            'ndcg20': 0.2,      # 排序准确性的权重
+            'recall20': 0.1     # 覆盖率的权重
+        }
+        
+        monitor_score = sum(base_metrics[k] * v for k, v in weights.items())
+        
+        # 3. 计算预测稳定性 
+        stability_score = calculate_prediction_stability(
+            val_batches_top1_acc_list,
+            val_batches_top5_acc_list,
+            val_batches_mrr_list
+        )
+        
+        # 4. 计算损失平衡性
+        loss_balance = calculate_loss_balance(
+            epoch_val_poi_loss,
+            epoch_val_time_loss,
+            epoch_val_cat_loss
+        )
+        
+        # 5. 最终监控指标
         monitor_loss = epoch_val_loss
-        monitor_score = np.mean(epoch_val_top1_acc * 4 + epoch_val_top20_acc)
-
-        # Learning rate schuduler
+        monitor_score = monitor_score * (1 + stability_score) * (1 + loss_balance)
+        
+        # 记录详细指标
+        logging.info(f"Detailed monitoring metrics:")
+        logging.info(f"Base metrics: {base_metrics}")
+        logging.info(f"Stability score: {stability_score:.4f}")
+        logging.info(f"Loss balance: {loss_balance:.4f}")
+        logging.info(f"Final monitor score: {monitor_score:.4f}")
+        
+        # Learning rate scheduler
         lr_scheduler.step(monitor_loss)
 
         # Print epoch results
@@ -1054,6 +1106,7 @@ def train(args):
             print(f'val_epochs_mrr_list={[float(f"{each:.4f}") for each in val_epochs_mrr_list]}', file=f)
             print(f'val_epochs_ncdg20_list={[float(f"{each:.4f}") for each in val_epochs_ndcg20_list]}', file=f)
             print(f'val_epochs_recall20_list={[float(f"{each:.4f}") for each in val_epochs_recall20_list]}', file=f)
+
 
 
 if __name__ == '__main__':

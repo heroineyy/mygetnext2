@@ -472,6 +472,80 @@ class GatingNetwork(nn.Module):
         return x
 
 
+# 添加POI特征融合模块
+class POIFeatureFusion(nn.Module):
+    def __init__(self, poi_embed_dim, fuse_way='adaptive'):
+        super(POIFeatureFusion, self).__init__()
+        self.fuse_way = fuse_way
+        self.poi_embed_dim = poi_embed_dim
+        
+        if fuse_way == 'adaptive':
+            # 自适应权重学习
+            self.weight_net = nn.Sequential(
+                nn.Linear(poi_embed_dim * 2, poi_embed_dim),
+                nn.ReLU(),
+                nn.Linear(poi_embed_dim, 2),
+                nn.Softmax(dim=-1)
+            )
+        elif fuse_way == 'concat':
+            # 拼接后对齐
+            self.align_layer = nn.Linear(poi_embed_dim * 2, poi_embed_dim)
+        elif fuse_way == 'manual':
+            # 手动加权
+            self.weight_poi = nn.Parameter(torch.tensor(0.5))
+            self.weight_gcn = nn.Parameter(torch.tensor(0.5))
+        else:
+            raise ValueError(f"Unsupported fusion way: {fuse_way}")
+        
+    def forward(self, poi_embedding, poi_gcn_embedding):
+        fused_embedding = poi_embedding
+        if self.fuse_way == 'adaptive':
+            # 自适应权重
+            concat_features = torch.cat([poi_embedding, poi_gcn_embedding], dim=-1)
+            weights = self.weight_net(concat_features)
+            fused_embedding = weights[0] * poi_embedding + weights[1] * poi_gcn_embedding
+            
+        elif self.fuse_way == 'concat':
+            # 拼接后对齐
+            concat_features = torch.cat([poi_embedding, poi_gcn_embedding], dim=-1)
+            fused_embedding = self.align_layer(concat_features)
+            
+        elif self.fuse_way == 'manual':
+            # 手动加权
+            weights = torch.sigmoid(torch.stack([self.weight_poi, self.weight_gcn]))
+            fused_embedding = weights[0] * poi_embedding + weights[1] * poi_gcn_embedding
+            
+        return fused_embedding
+    
+class EnhancedUserEmbedding(nn.Module):
+    def __init__(self, num_users, embed_dim, cooccurrence_matrix, k=5):
+        super(EnhancedUserEmbedding, self).__init__()
+        self.user_embedding = nn.Embedding(num_users, embed_dim)
+        self.cooccurrence_matrix = cooccurrence_matrix
+        self.k = k  # 每个用户考虑的相似用户数量
+        
+    def get_similar_users(self, user_idx):
+        """获取与目标用户最相似的k个用户"""
+        similar_users = torch.topk(self.cooccurrence_matrix[user_idx], self.k + 1)[1][1:]  # 去掉自己
+        return similar_users
+    
+    def forward(self, user_idx):
+        
+        base_embedding = self.user_embedding(user_idx)
+            
+        similar_users = self.get_similar_users(user_idx)
+        similar_embeddings = self.user_embedding(similar_users)
+            
+        # 3. 计算相似用户的加权平均
+        similarities = self.cooccurrence_matrix[user_idx][similar_users]
+        weights = F.softmax(similarities, dim=0)
+        similar_embedding = torch.sum(weights.unsqueeze(1) * similar_embeddings, dim=0)
+            
+        # 4. 融合基础嵌入和相似用户嵌入
+        enhanced_embedding = 0.7 * base_embedding + 0.3 * similar_embedding
+            
+        return enhanced_embedding
+
 # class LLMFeatureExtractor:
 #     def __init__(self, model_type="llama3", device="cuda"):
 #         self.model_type = model_type
