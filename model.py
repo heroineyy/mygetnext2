@@ -413,7 +413,6 @@ class TransformerModel(nn.Module):
         self.pos_encoder = PositionalEncoding(embed_size, dropout)
         encoder_layers = TransformerEncoderLayer(embed_size, nhead, nhid, dropout)
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
-        # self.encoder = nn.Embedding(num_poi, embed_size)
         self.embed_size = embed_size
         self.decoder_poi = nn.Linear(embed_size, num_poi)
         self.decoder_time = nn.Linear(embed_size, 1)
@@ -614,3 +613,78 @@ class EnhancedUserEmbedding(nn.Module):
 #         except Exception as e:
 #             print(f"Error in _category_to_poi_id: {e}")
 #             return 0
+
+class GatedExpertNetwork(nn.Module):
+    def __init__(self, embed_size, num_experts=4):
+        super(GatedExpertNetwork, self).__init__()
+        self.num_experts = num_experts
+        self.experts = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(embed_size, embed_size),
+                nn.ReLU(),
+                nn.Linear(embed_size, embed_size)
+            ) for _ in range(num_experts)
+        ])
+        self.gate = nn.Sequential(
+            nn.Linear(embed_size, num_experts),
+            nn.Softmax(dim=-1)
+        )
+        
+    def forward(self, x):
+        # todo :x shape是[batch_size, seq_len, embed_size],所以上述x是不是要转?
+        # x shape: [seq_len, batch_size, embed_size]
+        x = x.transpose(0, 1)
+        gate_weights = self.gate(x)  # [seq_len, batch_size, num_experts]
+        expert_outputs = []
+        for expert in self.experts:
+            expert_outputs.append(expert(x))
+        expert_outputs = torch.stack(expert_outputs, dim=-1)  # [seq_len, batch_size, embed_size, num_experts]
+        output = torch.einsum('sben,sbn->sbe', expert_outputs, gate_weights)
+        # todo : 这里output的shape是[seq_len, batch_size, embed_size],所以需要转置回来
+        output = output.transpose(0, 1)
+        return output
+
+class EnhancedTransformerModel(nn.Module):
+    def __init__(self, num_poi, num_cat, embed_size, nhead, nhid, nlayers, dropout=0.5):
+        super(EnhancedTransformerModel, self).__init__()
+        from torch.nn import TransformerEncoder, TransformerEncoderLayer
+        # 保持原有的初始化代码
+        self.pos_encoder = PositionalEncoding(embed_size, dropout)
+        encoder_layers = TransformerEncoderLayer(embed_size, nhead, nhid, dropout)
+        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+        self.embed_size = embed_size
+        self.gated_expert = GatedExpertNetwork(embed_size)
+        self.self_attention = nn.MultiheadAttention(embed_size, nhead)
+        self.decoder_poi = nn.Linear(embed_size, num_poi)
+        self.decoder_time = nn.Linear(embed_size, 1)
+        self.decoder_lat = nn.Linear(embed_size, 1)
+        self.decoder_lon = nn.Linear(embed_size, 1)
+        self.decoder_week = nn.Linear(embed_size, 7)
+        self.decoder_cat = nn.Linear(embed_size, num_cat)
+        self.decoder_categroy = nn.Linear(embed_size, 11)
+        self.init_weights()
+
+    def generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def init_weights(self):
+        initrange = 0.1
+        self.decoder_poi.bias.data.zero_()
+        self.decoder_poi.weight.data.uniform_(-initrange, initrange)
+        
+    def forward(self, src, src_mask):
+        src = src * math.sqrt(self.embed_size)
+        src = self.pos_encoder(src)
+        x = self.transformer_encoder(src, src_mask)
+        x = self.gated_expert(x)
+        x, _ = self.self_attention(x, x, x)
+        out_poi = self.decoder_poi(x)
+        out_time = self.decoder_time(x)
+        out_lat = self.decoder_lat(x)
+        out_lon = self.decoder_lon(x)
+        out_week = self.decoder_week(x)
+        out_cat = self.decoder_cat(x)
+        out_categroy = self.decoder_categroy(x)
+        return out_poi, out_time, out_lat, out_lon, out_cat, out_categroy, out_week

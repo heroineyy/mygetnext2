@@ -21,7 +21,7 @@ from tqdm import tqdm
 import hashlib
 
 from dataloader import load_graph_adj_mtx, load_graph_node_features
-from model import GCN, GenericEmbeddings,Time2Vec, GatingNetwork,TransformerModel, POIFeatureFusion,EnhancedUserEmbedding
+from model import GCN, GenericEmbeddings,Time2Vec, GatingNetwork,EnhancedTransformerModel, POIFeatureFusion,EnhancedUserEmbedding
 from param_parser import parameter_parser
 from utils import increment_path, calculate_laplacian_matrix, zipdir, top_k_acc_last_timestep, \
     mAP_metric_last_timestep, MRR_metric_last_timestep, maksed_mse_loss, NDCG_metric_last_timestep,\
@@ -324,7 +324,7 @@ def train(args):
     # %% Model6: Sequence model
     args.seq_input_embed = args.user_embed_dim + args.time_embed_dim +args.week_embed_dim + +args.geo_embed_dim*2 + args.poi_embed_dim + args.cat_embed_dim + args.cat2_embed_dim
     args.seq_input_embed3 = args.time_embed_dim + args.week_embed_dim + +args.geo_embed_dim * 2
-    seq_model = TransformerModel(num_pois,
+    seq_model = EnhancedTransformerModel(num_pois,
                                  num_cats,
                                  args.seq_input_embed,
                                  args.transformer_nhead,
@@ -598,7 +598,6 @@ def train(args):
             y_categroy = label_padded_categroy.to(device=args.device, dtype=torch.long)
             # todo:主要还是为了预测下一个poi点,所以需要批判性分析loss_time , loss_cat +loss_lat,loss_lon ,loss_categroy , loss_week是否有必要
             y_pred_poi, y_pred_time, y_pred_lat, y_pred_lon, y_pred_cat, y_pred_categroy ,y_pred_week = seq_model(x, src_mask)
-
             loss_poi = criterion_poi(y_pred_poi.transpose(1, 2), y_poi)
             loss_time = criterion_time(torch.squeeze(y_pred_time), torch.squeeze(y_time))
             loss_lat = criterion_time(torch.squeeze(y_pred_lat), torch.squeeze(y_lat))
