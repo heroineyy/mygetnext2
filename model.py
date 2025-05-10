@@ -615,7 +615,7 @@ class EnhancedUserEmbedding(nn.Module):
 #             return 0
 
 class GatedExpertNetwork(nn.Module):
-    def __init__(self, embed_size, num_experts=4):
+    def __init__(self, embed_size, num_experts=2):
         super(GatedExpertNetwork, self).__init__()
         self.num_experts = num_experts
         self.experts = nn.ModuleList([
@@ -631,7 +631,6 @@ class GatedExpertNetwork(nn.Module):
         )
         
     def forward(self, x):
-        # todo :x shape是[batch_size, seq_len, embed_size],所以上述x是不是要转?
         # x shape: [seq_len, batch_size, embed_size]
         x = x.transpose(0, 1)
         gate_weights = self.gate(x)  # [seq_len, batch_size, num_experts]
@@ -640,7 +639,6 @@ class GatedExpertNetwork(nn.Module):
             expert_outputs.append(expert(x))
         expert_outputs = torch.stack(expert_outputs, dim=-1)  # [seq_len, batch_size, embed_size, num_experts]
         output = torch.einsum('sben,sbn->sbe', expert_outputs, gate_weights)
-        # todo : 这里output的shape是[seq_len, batch_size, embed_size],所以需要转置回来
         output = output.transpose(0, 1)
         return output
 

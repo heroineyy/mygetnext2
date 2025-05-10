@@ -21,7 +21,7 @@ from tqdm import tqdm
 import hashlib
 
 from dataloader import load_graph_adj_mtx, load_graph_node_features
-from model import GCN, GenericEmbeddings,Time2Vec, GatingNetwork,EnhancedTransformerModel, POIFeatureFusion,EnhancedUserEmbedding
+from model import GCN, GenericEmbeddings,Time2Vec, GatingNetwork,TransformerModel, POIFeatureFusion,EnhancedUserEmbedding
 from param_parser import parameter_parser
 from utils import increment_path, calculate_laplacian_matrix, zipdir, top_k_acc_last_timestep, \
     mAP_metric_last_timestep, MRR_metric_last_timestep, maksed_mse_loss, NDCG_metric_last_timestep,\
@@ -90,7 +90,6 @@ def train(args):
     X[:, 1:num_cats + 1] = one_hot_rlt
     X[:, num_cats + 1:] = raw_X[:, 2:]
     logging.info(f"After one hot encoding poi cat, X.shape: {X.shape}")
-    logging.info(f'POI categories: {list(one_hot_encoder.categories_[0])}')
 
 
     # Normalization
@@ -324,7 +323,7 @@ def train(args):
     # %% Model6: Sequence model
     args.seq_input_embed = args.user_embed_dim + args.time_embed_dim +args.week_embed_dim + +args.geo_embed_dim*2 + args.poi_embed_dim + args.cat_embed_dim + args.cat2_embed_dim
     args.seq_input_embed3 = args.time_embed_dim + args.week_embed_dim + +args.geo_embed_dim * 2
-    seq_model = EnhancedTransformerModel(num_pois,
+    seq_model = TransformerModel(num_pois,
                                  num_cats,
                                  args.seq_input_embed,
                                  args.transformer_nhead,
@@ -375,38 +374,41 @@ def train(args):
         embedding = embed_model(input_tensor)
         return torch.squeeze(embedding).to(device=device)
 
+    def calculate_relative_location(locations):
+        base_location = locations[0]
+        location_range = max(locations) - min(locations)
+        scale_location = 1.0 / (location_range + 1e-6)
+        relative_locations = []
+        for location in locations:
+            rel_location = (location - base_location) * scale_location
+            relative_locations.append(rel_location)
+        return relative_locations
 
-    def input_traj_to_embeddings(sample):
-        # todo:改进建议:
-        # 添加特征重要性权重
-        # 使用更复杂的特征融合方式
-        # 考虑添加位置编码
-        # 增加特征交互层
-        # 添加dropout防止过拟合
-        # Parse sample
+
+    def input_traj_to_embeddings(sample,label_seq_lat,label_seq_lon):
         traj_id = sample[0]
         input_seq = [each[0] for each in sample[1]]
         input_seq_time = [each[1] for each in sample[1]]
-        input_seq_lat = [each[2] for each in sample[1]]
-        input_seq_lon = [each[3] for each in sample[1]]
+        input_seq_lat = calculate_relative_location([each[2] for each in sample[1]])
+        input_seq_lon = calculate_relative_location([each[3] for each in sample[1]])
         input_seq_week = [each[4] for each in sample[1]]
         input_seq_cat = [poi_idx2cat_id_dict[each] for each in input_seq]
         input_seq_category = [poi_idx2category_id_dict[each] for each in input_seq]
 
-        # todo:如何让用到下面的信息?
+        # todo:如何让用到下面的信息,可以用word2vec?
         # input_seq_cat_name = [poi_idx2cat_name_dict[each] for each in input_seq]
         # input_seq_category_name = [poi_idx2category_name_dict[each] for each in input_seq]
         
         # 3. 获取用户和时空特征
+        ## todo:用户初始化id可以根据用户历史记录对各个签到点的喜好程度进行初始化
         user_id = traj_id.split('_')[0]
         user_embedding = get_embedding(user_id2idx_dict[user_id], user_embed_model, args.device)  # shape: [user_embed_dim]
         
         # 4. 获取最后一个点的时空信息
         last_time_embedding = get_embedding([sample[2][-1][1]], time_embed_model, args.device, is_numeric=True)  # shape: [time_embed_dim]
-        last_lat_embedding = get_embedding([np.radians(sample[2][-1][2])], lat_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
-        last_lon_embedding = get_embedding([np.radians(sample[2][-1][3])], lon_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
+        last_lat_embedding = get_embedding([label_seq_lat[-1]], lat_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
+        last_lon_embedding = get_embedding([label_seq_lon[-1]], lon_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
         last_week_embedding = get_embedding([sample[2][-1][4]], week_embed_model, args.device)  # shape: [week_embed_dim]
-        
         last_st_embeddingq = torch.cat((last_time_embedding, last_lat_embedding, last_lon_embedding, last_week_embedding), dim=-1)  # shape: [time_embed_dim + 2*geo_embed_dim + week_embed_dim]
         aligned_last_st_embedding = align_layer(last_st_embeddingq)  # shape: [seq_input_embed]
         
@@ -416,16 +418,14 @@ def train(args):
             # 获取 GCN embedding
             # poi_gcn_embedding = poi_gcn_embeddings[input_seq[idx]]  # shape: [poi_embed_dim]
             # poi_gcn_embedding = torch.squeeze(poi_gcn_embedding).to(device=args.device)
-
             poi_embedding = get_embedding(input_seq[idx], poi_embed_model, args.device)
-            
             # 使用POI特征融合模块
             # fused_poi_embedding = poi_fusion(poi_embedding, poi_gcn_embedding)
             
             # 获取时空特征
             time_embedding = get_embedding([input_seq_time[idx]], time_embed_model, args.device, is_numeric=True)  # shape: [time_embed_dim]
-            lat_embedding = get_embedding([np.radians(input_seq_lat[idx])], lat_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
-            lon_embedding = get_embedding([np.radians(input_seq_lon[idx])], lon_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
+            lat_embedding = get_embedding([input_seq_lat[idx]], lat_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
+            lon_embedding = get_embedding([input_seq_lon[idx]], lon_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
             week_embedding = get_embedding([input_seq_week[idx]], week_embed_model, args.device)  # shape: [week_embed_dim]
             cat_embedding = get_embedding([input_seq_cat[idx]], cat_embed_model, args.device)  # shape: [cat_embed_dim]
             cat2_embedding = get_embedding([input_seq_category[idx]], categroy_embed_model, args.device)  # shape: [cat2_embed_dim]
@@ -555,17 +555,17 @@ def train(args):
 
             # Convert input seq to embeddings
             for sample in batch:
+
                 input_seq = [each[0] for each in sample[1]]
                 label_seq = [each[0] for each in sample[2]]
                 label_seq_time = [each[1] for each in sample[2]]
-                label_seq_lat = [np.radians(each[2]) for each in sample[2]]
-                label_seq_lon = [np.radians(each[3]) for each in sample[2]]
+                label_seq_lat = calculate_relative_location([each[2] for each in sample[2]])
+                label_seq_lon = calculate_relative_location([each[3] for each in sample[2]])
                 label_seq_week = [each[4] for each in sample[2]]
-
                 label_seq_cats = [poi_idx2cat_id_dict[each] for each in label_seq]
                 label_seq_category = [poi_idx2category_id_dict[each] for each in label_seq]
 
-                input_seq_embed = input_traj_to_embeddings(sample)
+                input_seq_embed = input_traj_to_embeddings(sample, label_seq_lat, label_seq_lon)
                 batch_seq_embeds.append(input_seq_embed)
                 batch_seq_lens.append(len(input_seq))
                 batch_input_seqs.append(input_seq)
@@ -607,6 +607,7 @@ def train(args):
             loss_categroy = criterion_categroy(y_pred_categroy.transpose(1, 2), y_categroy)
 
             # Final loss
+            ## todo:这里损失太多可能有所干扰
             loss = loss_poi + loss_time * args.time_loss_weight + loss_cat +loss_lat + loss_lon +loss_categroy + loss_week
             optimizer.zero_grad()
             loss.backward(retain_graph=True)
@@ -759,12 +760,12 @@ def train(args):
                 input_seq = [each[0] for each in sample[1]]
                 label_seq = [each[0] for each in sample[2]]
                 label_seq_time = [each[1] for each in sample[2]]
-                label_seq_lat = [np.radians(each[2]) for each in sample[2]]
-                label_seq_lon = [np.radians(each[3]) for each in sample[2]]
+                label_seq_lat = calculate_relative_location([each[2] for each in sample[2]])
+                label_seq_lon = calculate_relative_location([each[3] for each in sample[2]])
                 label_seq_week = [each[4] for each in sample[2]]
                 label_seq_cats = [poi_idx2cat_id_dict[each] for each in label_seq]
                 label_seq_category = [poi_idx2category_id_dict[each] for each in label_seq]
-                input_seq_embed = input_traj_to_embeddings(sample)
+                input_seq_embed = input_traj_to_embeddings(sample, label_seq_lat, label_seq_lon)
 
                 batch_seq_embeds.append(input_seq_embed)
                 batch_seq_lens.append(len(input_seq))
