@@ -17,9 +17,8 @@ def parameter_parser():
                         help='Random seed')
     parser.add_argument('--device',
                         type=str,
-                        default='2',
+                        default=device,
                         help='')
-    # Data
     parser.add_argument('--data-adj-mtx',
                         type=str,
                         default='dataset/NYC/graph_A.csv',
@@ -170,7 +169,7 @@ def parameter_parser():
                         type=int,
                         default=64973,
                         help='python console use only')
-    parser.add_argument('--fuse_way', type=str, default='adaptive',
+    parser.add_argument('--fuse_way', type=str, default='manual',
                       choices=['adaptive', 'concat', 'manual'],
                       help='POI特征融合方式: adaptive(自适应权重), concat(拼接对齐), manual(手动加权)')
     parser.add_argument('--similar_user_k', type=int, default=5,

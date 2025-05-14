@@ -6,7 +6,6 @@ import pickle
 import zipfile
 from pathlib import Path
 
-
 import numpy as np
 import pandas as pd
 import torch
@@ -21,7 +20,7 @@ from tqdm import tqdm
 import hashlib
 
 from dataloader import load_graph_adj_mtx, load_graph_node_features
-from model import GCN, GenericEmbeddings,Time2Vec, GatingNetwork,TransformerModel, POIFeatureFusion,EnhancedUserEmbedding
+from model import GCN, GenericEmbeddings,Time2Vec, FuseEmbeddings,TransformerModel, POIFeatureFusion,EnhancedUserEmbedding
 from param_parser import parameter_parser
 from utils import increment_path, calculate_laplacian_matrix, zipdir, top_k_acc_last_timestep, \
     mAP_metric_last_timestep, MRR_metric_last_timestep, maksed_mse_loss, NDCG_metric_last_timestep,\
@@ -296,10 +295,10 @@ def train(args):
     A = A.to(device=args.device, dtype=torch.float)
 
     args.gcn_nfeat = X.shape[1]
-    # poi_gcn_model = GCN(ninput=args.gcn_nfeat,
-    #                       nhid=args.gcn_nhid,
-    #                       noutput=args.poi_embed_dim,
-    #                       dropout=args.gcn_dropout)
+    poi_gcn_model = GCN(ninput=args.gcn_nfeat,
+                          nhid=args.gcn_nhid,
+                          noutput=args.poi_embed_dim,
+                          dropout=args.gcn_dropout)
 
 
     # %% Model2: User embedding model
@@ -308,9 +307,8 @@ def train(args):
     cat_embed_model = GenericEmbeddings(num_cats, args.cat_embed_dim)
     categroy_embed_model = GenericEmbeddings(num_categroys, args.cat2_embed_dim)
 
-
     # 初始化POI特征融合模块
-    # poi_fusion = POIFeatureFusion(args.poi_embed_dim, args.fuse_way)
+    poi_fusion = POIFeatureFusion(args.poi_embed_dim, args.fuse_way)
 
     # %% Model3: Time week lat lon Model
     time_embed_model = Time2Vec('sin', out_dim=args.time_embed_dim)
@@ -331,7 +329,9 @@ def train(args):
                                  args.transformer_nlayers,
                                  dropout=args.transformer_dropout)
 
-    embed_fuse_model2 = GatingNetwork(args.seq_input_embed, args.gating_hidden_dim).to(args.device)
+    embed_fuse_model1 = FuseEmbeddings(args.user_embed_dim , args.poi_embed_dim , args.cat_embed_dim , args.cat2_embed_dim).to(args.device)
+    embed_fuse_model2 = FuseEmbeddings(args.geo_embed_dim ,args.geo_embed_dim).to(args.device)
+    embed_fuse_model3 = FuseEmbeddings(args.time_embed_dim ,args.week_embed_dim).to(args.device)
     align_layer = nn.Linear(args.seq_input_embed3, args.seq_input_embed).to(args.device) # 将seq_input_embed3线性转换为seq_input_embed,对齐
     multihead_attn = nn.MultiheadAttention(embed_dim=args.seq_input_embed, num_heads=4).to(args.device)
     layer_norm = nn.LayerNorm(args.seq_input_embed).to(args.device)
@@ -339,7 +339,7 @@ def train(args):
 
     # Define overall loss and optimizer
     optimizer = optim.Adam(params=list(poi_embed_model.parameters()) +
-                                  # list(poi_gcn_model.parameters()) +
+                                  list(poi_gcn_model.parameters()) +
                                   list(user_embed_model.parameters()) +
                                   list(time_embed_model.parameters()) +
                                   list(lat_embed_model.parameters()) +
@@ -347,11 +347,13 @@ def train(args):
                                   list(week_embed_model.parameters()) +
                                   list(cat_embed_model.parameters()) +
                                   list(categroy_embed_model.parameters()) +
+                                  list(embed_fuse_model1.parameters()) +
                                   list(embed_fuse_model2.parameters()) +
+                                  list(embed_fuse_model3.parameters()) +
                                   list(align_layer.parameters()) +
                                   list(multihead_attn.parameters()) +
                                   list(layer_norm.parameters()) +
-                                  # list(poi_fusion.parameters()) +
+                                  list(poi_fusion.parameters()) +
                                   list(seq_model.parameters()),
                            lr=args.lr,
                            weight_decay=args.weight_decay)
@@ -385,7 +387,7 @@ def train(args):
         return relative_locations
 
 
-    def input_traj_to_embeddings(sample,label_seq_lat,label_seq_lon):
+    def input_traj_to_embeddings(sample,label_seq_lat,label_seq_lon,poi_gcn_embeddings):
         traj_id = sample[0]
         input_seq = [each[0] for each in sample[1]]
         input_seq_time = [each[1] for each in sample[1]]
@@ -394,11 +396,9 @@ def train(args):
         input_seq_week = [each[4] for each in sample[1]]
         input_seq_cat = [poi_idx2cat_id_dict[each] for each in input_seq]
         input_seq_category = [poi_idx2category_id_dict[each] for each in input_seq]
-
         # todo:如何让用到下面的信息,可以用word2vec?
         # input_seq_cat_name = [poi_idx2cat_name_dict[each] for each in input_seq]
         # input_seq_category_name = [poi_idx2category_name_dict[each] for each in input_seq]
-        
         # 3. 获取用户和时空特征
         ## todo:用户初始化id可以根据用户历史记录对各个签到点的喜好程度进行初始化
         user_id = traj_id.split('_')[0]
@@ -416,11 +416,11 @@ def train(args):
         input_seq_embed = []
         for idx in range(len(input_seq)):
             # 获取 GCN embedding
-            # poi_gcn_embedding = poi_gcn_embeddings[input_seq[idx]]  # shape: [poi_embed_dim]
-            # poi_gcn_embedding = torch.squeeze(poi_gcn_embedding).to(device=args.device)
+            poi_gcn_embedding = poi_gcn_embeddings[input_seq[idx]]  # shape: [poi_embed_dim]
+            poi_gcn_embedding = torch.squeeze(poi_gcn_embedding).to(device=args.device)
             poi_embedding = get_embedding(input_seq[idx], poi_embed_model, args.device)
             # 使用POI特征融合模块
-            # fused_poi_embedding = poi_fusion(poi_embedding, poi_gcn_embedding)
+            fused_poi_embedding = poi_fusion(poi_embedding, poi_gcn_embedding)
             
             # 获取时空特征
             time_embedding = get_embedding([input_seq_time[idx]], time_embed_model, args.device, is_numeric=True)  # shape: [time_embed_dim]
@@ -430,32 +430,20 @@ def train(args):
             cat_embedding = get_embedding([input_seq_cat[idx]], cat_embed_model, args.device)  # shape: [cat_embed_dim]
             cat2_embedding = get_embedding([input_seq_category[idx]], categroy_embed_model, args.device)  # shape: [cat2_embed_dim]
             
-            # 融合时空特征
-            st_features = torch.cat([user_embedding, poi_embedding, time_embedding, week_embedding, lat_embedding, lon_embedding, cat_embedding, cat2_embedding], dim=-1)   # shape: [seq_input_embed]
-            gate_values = embed_fuse_model2(st_features)   # shape: [seq_input_embed]
-            gated_st_features = st_features * gate_values  # shape: [seq_input_embed]
+            fuse_embed1 = embed_fuse_model1(user_embedding, fused_poi_embedding,cat_embedding, cat2_embedding)
+            fuse_embed2 = embed_fuse_model2(lat_embedding, lon_embedding)  
+            fuse_embed3 = embed_fuse_model3(week_embedding,time_embedding)    
+            # 三个融合向量拼接
+            fused_embed = torch.cat((fuse_embed1, fuse_embed2, fuse_embed3), dim=-1)  # shape: [seq_input_embed]
+            fused_embed = 0.9*fused_embed + 0.1*aligned_last_st_embedding
 
-            input_seq_embed.append(gated_st_features)
-        
-        # 6. 使用注意力机制融合序列特征和最后一个点的时空信息
-        input_seq_embed = torch.stack(input_seq_embed, dim=0)  # shape: [seq_len, seq_input_embed]
-        query = aligned_last_st_embedding.unsqueeze(0).expand(input_seq_embed.size(0), -1)  # shape: [seq_len, seq_input_embed]
-        
-        # 使用全局定义的注意力层和归一化层
-        attn_output, _ = multihead_attn(query, input_seq_embed, input_seq_embed)  # shape: [seq_len, seq_input_embed]
-        
-        # 7. 添加残差连接
-        attn_output = attn_output + input_seq_embed  # shape: [seq_len, seq_input_embed]
-        
-        # 使用全局定义的归一化层
-        final_features = layer_norm(attn_output)  # shape: [seq_len, seq_input_embed]
-
-        return final_features
+            input_seq_embed.append(fused_embed)
+        return input_seq_embed
 
 
     # %% ====================== Train ======================
     poi_embed_model = poi_embed_model.to(device=args.device)
-    # poi_gcn_model = poi_gcn_model.to(device=args.device)
+    poi_gcn_model = poi_gcn_model.to(device=args.device)
     user_embed_model = user_embed_model.to(device=args.device)
     time_embed_model = time_embed_model.to(device=args.device)
     lat_embed_model = lat_embed_model.to(device=args.device)
@@ -463,12 +451,14 @@ def train(args):
     week_embed_model = week_embed_model.to(device=args.device)
     cat_embed_model = cat_embed_model.to(device=args.device)
     categroy_embed_model = categroy_embed_model.to(device=args.device)
+    embed_fuse_model1 = embed_fuse_model1.to(device=args.device)
     embed_fuse_model2 = embed_fuse_model2.to(device=args.device)
+    embed_fuse_model3 = embed_fuse_model3.to(device=args.device)
     align_layer = align_layer.to(device=args.device)
     seq_model = seq_model.to(device=args.device)
     multihead_attn = multihead_attn.to(device=args.device)
     layer_norm = layer_norm.to(device=args.device)
-    # poi_fusion = poi_fusion.to(device=args.device)
+    poi_fusion = poi_fusion.to(device=args.device)
 
     # %% Loop epoch
     # For plotting
@@ -501,7 +491,7 @@ def train(args):
 
     for epoch in range(args.epochs):
         logging.info(f"{'*' * 50}Epoch:{epoch:03d}{'*' * 50}\n")
-        # poi_gcn_model.train()
+        poi_gcn_model.train()
         user_embed_model.train()
         poi_embed_model.train()
         time_embed_model.train()
@@ -510,12 +500,14 @@ def train(args):
         week_embed_model.train()
         cat_embed_model.train()
         categroy_embed_model.train()
+        embed_fuse_model1.train()
         embed_fuse_model2.train()
+        embed_fuse_model3.train()
         align_layer.train()
         seq_model.train()
         multihead_attn.train()
         layer_norm.train()
-        # poi_fusion.train()
+        poi_fusion.train()
 
         train_batches_top1_acc_list = []
         train_batches_top5_acc_list = []
@@ -550,9 +542,7 @@ def train(args):
             batch_seq_labels_week = []
             batch_seq_labels_cat = []
             batch_seq_labels_categroy = []
-
-            # poi_gcn_embeddings = poi_gcn_model(X, A)
-
+            poi_gcn_embeddings = poi_gcn_model(X, A)
             # Convert input seq to embeddings
             for sample in batch:
 
@@ -565,7 +555,7 @@ def train(args):
                 label_seq_cats = [poi_idx2cat_id_dict[each] for each in label_seq]
                 label_seq_category = [poi_idx2category_id_dict[each] for each in label_seq]
 
-                input_seq_embed = input_traj_to_embeddings(sample, label_seq_lat, label_seq_lon)
+                input_seq_embed = torch.stack(input_traj_to_embeddings(sample, label_seq_lat, label_seq_lon, poi_gcn_embeddings))
                 batch_seq_embeds.append(input_seq_embed)
                 batch_seq_lens.append(len(input_seq))
                 batch_input_seqs.append(input_seq)
@@ -704,19 +694,21 @@ def train(args):
 
         user_embed_model.eval()
         poi_embed_model.eval()
-        # poi_gcn_model.eval()
+        poi_gcn_model.eval()
         time_embed_model.eval()
         lat_embed_model.eval()
         lon_embed_model.eval()
         week_embed_model.eval()
         cat_embed_model.eval()
         categroy_embed_model.eval()
+        embed_fuse_model1.eval()
         embed_fuse_model2.eval()
+        embed_fuse_model3.eval()
         align_layer.eval()
         seq_model.eval()
         multihead_attn.eval()
         layer_norm.eval()
-        # poi_fusion.eval()
+        poi_fusion.eval()
 
 
         val_batches_top1_acc_list = []
@@ -752,7 +744,7 @@ def train(args):
             batch_seq_labels_cat = []
             batch_seq_labels_categroy = []
 
-            # poi_gcn_embeddings = poi_gcn_model(X, A)
+            poi_gcn_embeddings = poi_gcn_model(X, A)
 
 
             # Convert input seq to embeddings
@@ -765,7 +757,7 @@ def train(args):
                 label_seq_week = [each[4] for each in sample[2]]
                 label_seq_cats = [poi_idx2cat_id_dict[each] for each in label_seq]
                 label_seq_category = [poi_idx2category_id_dict[each] for each in label_seq]
-                input_seq_embed = input_traj_to_embeddings(sample, label_seq_lat, label_seq_lon)
+                input_seq_embed = torch.stack(input_traj_to_embeddings(sample, label_seq_lat, label_seq_lon, poi_gcn_embeddings))
 
                 batch_seq_embeds.append(input_seq_embed)
                 batch_seq_lens.append(len(input_seq))

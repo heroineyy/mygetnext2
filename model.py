@@ -106,14 +106,43 @@ class GenericEmbeddings(nn.Module):
 
 
 class FuseEmbeddings(nn.Module):
-    def __init__(self, user_embed_dim, poi_embed_dim):
+    def __init__(self, *embed_dims):
+        """
+        初始化融合嵌入层
+        Args:
+            *embed_dims: 可变数量的嵌入维度参数
+        """
         super(FuseEmbeddings, self).__init__()
-        embed_dim = user_embed_dim + poi_embed_dim
-        self.fuse_embed = nn.Linear(embed_dim, embed_dim)
+        # 计算总嵌入维度
+        self.total_embed_dim = sum(embed_dims)
+        # 创建融合层
+        self.fuse_embed = nn.Linear(self.total_embed_dim, self.total_embed_dim)
         self.leaky_relu = nn.LeakyReLU(0.2)
+        
+        # 保存各个嵌入的维度，用于后续处理
+        self.embed_dims = embed_dims
 
-    def forward(self, user_embed, poi_embed):
-        x = self.fuse_embed(torch.cat((user_embed, poi_embed), 0))
+    def forward(self, *embeddings):
+        """
+        前向传播
+        Args:
+            *embeddings: 可变数量的嵌入向量
+        Returns:
+            融合后的嵌入向量
+        """
+        # 检查输入数量是否匹配
+        assert len(embeddings) == len(self.embed_dims), \
+            f"输入嵌入数量 {len(embeddings)} 与初始化时的维度数量 {len(self.embed_dims)} 不匹配"
+            
+        # 检查每个嵌入的维度
+        for i, (embed, dim) in enumerate(zip(embeddings, self.embed_dims)):
+            assert embed.size(-1) == dim, \
+                f"第 {i+1} 个嵌入的维度 {embed.size(-1)} 与初始化时的维度 {dim} 不匹配"
+        
+        # 拼接所有嵌入
+        x = torch.cat(embeddings, dim=-1)
+        # 融合
+        x = self.fuse_embed(x)
         x = self.leaky_relu(x)
         return x
 
@@ -511,8 +540,7 @@ class POIFeatureFusion(nn.Module):
             
         elif self.fuse_way == 'manual':
             # 手动加权
-            weights = torch.sigmoid(torch.stack([self.weight_poi, self.weight_gcn]))
-            fused_embedding = weights[0] * poi_embedding + weights[1] * poi_gcn_embedding
+            fused_embedding = 0.5 * poi_embedding + 0.5 * poi_gcn_embedding
             
         return fused_embedding
     
