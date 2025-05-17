@@ -447,7 +447,6 @@ class TransformerModel(nn.Module):
         self.decoder_time = nn.Linear(embed_size, 1)
         self.decoder_lat = nn.Linear(embed_size, 1)
         self.decoder_lon = nn.Linear(embed_size, 1)
-        self.decoder_week = nn.Linear(embed_size, 7)
         self.decoder_cat = nn.Linear(embed_size, num_cat)
         self.decoder_categroy = nn.Linear(embed_size, 11)
         self.init_weights()
@@ -470,10 +469,9 @@ class TransformerModel(nn.Module):
         out_time = self.decoder_time(x)
         out_lat = self.decoder_lat(x)
         out_lon = self.decoder_lon(x)
-        out_week = self.decoder_week(x)
         out_cat = self.decoder_cat(x)
         out_categroy = self.decoder_categroy(x)
-        return out_poi, out_time, out_lat,out_lon,out_cat,out_categroy,out_week
+        return out_poi, out_time, out_lat,out_lon,out_cat,out_categroy
 
 # 定义一个模拟大语言模型预测的函数
 # def llm_prediction(input_categories):

@@ -1,5 +1,4 @@
 import logging
-import logging
 import os
 import pathlib
 import pickle
@@ -312,15 +311,14 @@ def train(args):
 
     # %% Model3: Time week lat lon Model
     time_embed_model = Time2Vec('sin', out_dim=args.time_embed_dim)
-    week_embed_model = GenericEmbeddings(7, args.week_embed_dim)
+    # 去掉week的信息
+    # week_embed_model = GenericEmbeddings(7, args.week_embed_dim)
     lat_embed_model = Time2Vec('sin', out_dim=args.geo_embed_dim)
     lon_embed_model = Time2Vec('sin', out_dim=args.geo_embed_dim)
 
-
-
     # %% Model6: Sequence model
-    args.seq_input_embed = args.user_embed_dim + args.time_embed_dim +args.week_embed_dim + +args.geo_embed_dim*2 + args.poi_embed_dim + args.cat_embed_dim + args.cat2_embed_dim
-    args.seq_input_embed3 = args.time_embed_dim + args.week_embed_dim + +args.geo_embed_dim * 2
+    args.seq_input_embed = args.user_embed_dim + args.time_embed_dim  + +args.geo_embed_dim*2 + args.poi_embed_dim + args.cat_embed_dim + args.cat2_embed_dim
+    args.seq_input_embed3 = args.time_embed_dim  + +args.geo_embed_dim * 2
     seq_model = TransformerModel(num_pois,
                                  num_cats,
                                  args.seq_input_embed,
@@ -330,11 +328,10 @@ def train(args):
                                  dropout=args.transformer_dropout)
 
     embed_fuse_model1 = FuseEmbeddings(args.user_embed_dim , args.poi_embed_dim , args.cat_embed_dim , args.cat2_embed_dim).to(args.device)
-    embed_fuse_model2 = FuseEmbeddings(args.geo_embed_dim ,args.geo_embed_dim).to(args.device)
-    embed_fuse_model3 = FuseEmbeddings(args.time_embed_dim ,args.week_embed_dim).to(args.device)
+    embed_fuse_model2 = FuseEmbeddings(args.time_embed_dim , args.geo_embed_dim ,args.geo_embed_dim).to(args.device)
+    #embed_fuse_model3 = FuseEmbeddings(args.time_embed_dim ,args.week_embed_dim).to(args.device)
     align_layer = nn.Linear(args.seq_input_embed3, args.seq_input_embed).to(args.device) # 将seq_input_embed3线性转换为seq_input_embed,对齐
-    multihead_attn = nn.MultiheadAttention(embed_dim=args.seq_input_embed, num_heads=4).to(args.device)
-    layer_norm = nn.LayerNorm(args.seq_input_embed).to(args.device)
+
 
 
     # Define overall loss and optimizer
@@ -344,15 +341,15 @@ def train(args):
                                   list(time_embed_model.parameters()) +
                                   list(lat_embed_model.parameters()) +
                                   list(lon_embed_model.parameters()) +
-                                  list(week_embed_model.parameters()) +
+                                  # list(week_embed_model.parameters()) +
                                   list(cat_embed_model.parameters()) +
                                   list(categroy_embed_model.parameters()) +
                                   list(embed_fuse_model1.parameters()) +
                                   list(embed_fuse_model2.parameters()) +
-                                  list(embed_fuse_model3.parameters()) +
+                                  # list(embed_fuse_model3.parameters()) +
                                   list(align_layer.parameters()) +
-                                  list(multihead_attn.parameters()) +
-                                  list(layer_norm.parameters()) +
+                                  # list(multihead_attn.parameters()) +
+                                  # list(layer_norm.parameters()) +
                                   list(poi_fusion.parameters()) +
                                   list(seq_model.parameters()),
                            lr=args.lr,
@@ -361,7 +358,7 @@ def train(args):
     criterion_poi = nn.CrossEntropyLoss(ignore_index=-1)  # -1 is padding
     criterion_cat = nn.CrossEntropyLoss(ignore_index=-1)  # -1 is padding
     criterion_categroy = nn.CrossEntropyLoss(ignore_index=-1)  # -1 is padding
-    criterion_week = nn.CrossEntropyLoss(ignore_index=-1)  # -1 is padding
+    # criterion_week = nn.CrossEntropyLoss(ignore_index=-1)  # -1 is padding
     criterion_time = maksed_mse_loss
 
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -383,7 +380,7 @@ def train(args):
         relative_locations = []
         for location in locations:
             rel_location = (location - base_location) * scale_location
-            relative_locations.append(rel_location)
+            relative_locations.append(np.radians(rel_location))
         return relative_locations
 
 
@@ -393,10 +390,10 @@ def train(args):
         input_seq_time = [each[1] for each in sample[1]]
         input_seq_lat = calculate_relative_location([each[2] for each in sample[1]])
         input_seq_lon = calculate_relative_location([each[3] for each in sample[1]])
-        input_seq_week = [each[4] for each in sample[1]]
+        # input_seq_week = [each[4] for each in sample[1]]
         input_seq_cat = [poi_idx2cat_id_dict[each] for each in input_seq]
         input_seq_category = [poi_idx2category_id_dict[each] for each in input_seq]
-        # todo:如何让用到下面的信息,可以用word2vec?
+        # todo:如何让用到下面的信息,可以用word2vec?或者用bert等文本语义编码器！
         # input_seq_cat_name = [poi_idx2cat_name_dict[each] for each in input_seq]
         # input_seq_category_name = [poi_idx2category_name_dict[each] for each in input_seq]
         # 3. 获取用户和时空特征
@@ -408,8 +405,8 @@ def train(args):
         last_time_embedding = get_embedding([sample[2][-1][1]], time_embed_model, args.device, is_numeric=True)  # shape: [time_embed_dim]
         last_lat_embedding = get_embedding([label_seq_lat[-1]], lat_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
         last_lon_embedding = get_embedding([label_seq_lon[-1]], lon_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
-        last_week_embedding = get_embedding([sample[2][-1][4]], week_embed_model, args.device)  # shape: [week_embed_dim]
-        last_st_embeddingq = torch.cat((last_time_embedding, last_lat_embedding, last_lon_embedding, last_week_embedding), dim=-1)  # shape: [time_embed_dim + 2*geo_embed_dim + week_embed_dim]
+        #last_week_embedding = get_embedding([sample[2][-1][4]], week_embed_model, args.device)  # shape: [week_embed_dim]
+        last_st_embeddingq = torch.cat((last_time_embedding, last_lat_embedding, last_lon_embedding), dim=-1)  # shape: [time_embed_dim + 2*geo_embed_dim 
         aligned_last_st_embedding = align_layer(last_st_embeddingq)  # shape: [seq_input_embed]
         
         # 5. 构建序列特征
@@ -426,16 +423,18 @@ def train(args):
             time_embedding = get_embedding([input_seq_time[idx]], time_embed_model, args.device, is_numeric=True)  # shape: [time_embed_dim]
             lat_embedding = get_embedding([input_seq_lat[idx]], lat_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
             lon_embedding = get_embedding([input_seq_lon[idx]], lon_embed_model, args.device, is_numeric=True)  # shape: [geo_embed_dim]
-            week_embedding = get_embedding([input_seq_week[idx]], week_embed_model, args.device)  # shape: [week_embed_dim]
+            # week_embedding = get_embedding([input_seq_week[idx]], week_embed_model, args.device)  # shape: [week_embed_dim]
+            
+            # todo:cat_embedding和cat·_embedding需要改进一下构建方法，先onehot编码再用全连接层进行压缩
             cat_embedding = get_embedding([input_seq_cat[idx]], cat_embed_model, args.device)  # shape: [cat_embed_dim]
             cat2_embedding = get_embedding([input_seq_category[idx]], categroy_embed_model, args.device)  # shape: [cat2_embed_dim]
             
             fuse_embed1 = embed_fuse_model1(user_embedding, fused_poi_embedding,cat_embedding, cat2_embedding)
-            fuse_embed2 = embed_fuse_model2(lat_embedding, lon_embedding)  
-            fuse_embed3 = embed_fuse_model3(week_embedding,time_embedding)    
+            fuse_embed2 = embed_fuse_model2(lat_embedding, lon_embedding)
+            # fuse_embed3 = embed_fuse_model3(week_embedding,time_embedding)    
             # 三个融合向量拼接
-            fused_embed = torch.cat((fuse_embed1, fuse_embed2, fuse_embed3), dim=-1)  # shape: [seq_input_embed]
-            fused_embed = 0.9*fused_embed + 0.1*aligned_last_st_embedding
+            fused_embed = torch.cat((fuse_embed1, fuse_embed2,time_embedding), dim=-1)  # shape: [seq_input_embed]
+            fused_embed = 0.8*fused_embed + 0.2*aligned_last_st_embedding
 
             input_seq_embed.append(fused_embed)
         return input_seq_embed
@@ -448,16 +447,16 @@ def train(args):
     time_embed_model = time_embed_model.to(device=args.device)
     lat_embed_model = lat_embed_model.to(device=args.device)
     lon_embed_model = lon_embed_model.to(device=args.device)
-    week_embed_model = week_embed_model.to(device=args.device)
+    # week_embed_model = week_embed_model.to(device=args.device)
     cat_embed_model = cat_embed_model.to(device=args.device)
     categroy_embed_model = categroy_embed_model.to(device=args.device)
     embed_fuse_model1 = embed_fuse_model1.to(device=args.device)
     embed_fuse_model2 = embed_fuse_model2.to(device=args.device)
-    embed_fuse_model3 = embed_fuse_model3.to(device=args.device)
+    # embed_fuse_model3 = embed_fuse_model3.to(device=args.device)
     align_layer = align_layer.to(device=args.device)
     seq_model = seq_model.to(device=args.device)
-    multihead_attn = multihead_attn.to(device=args.device)
-    layer_norm = layer_norm.to(device=args.device)
+    # multihead_attn = multihead_attn.to(device=args.device)
+    # layer_norm = layer_norm.to(device=args.device)
     poi_fusion = poi_fusion.to(device=args.device)
 
     # %% Loop epoch
@@ -497,16 +496,16 @@ def train(args):
         time_embed_model.train()
         lat_embed_model.train()
         lon_embed_model.train()
-        week_embed_model.train()
+        # week_embed_model.train()
         cat_embed_model.train()
         categroy_embed_model.train()
         embed_fuse_model1.train()
         embed_fuse_model2.train()
-        embed_fuse_model3.train()
+        # embed_fuse_model3.train()
         align_layer.train()
         seq_model.train()
-        multihead_attn.train()
-        layer_norm.train()
+        # multihead_attn.train()
+        # layer_norm.train()
         poi_fusion.train()
 
         train_batches_top1_acc_list = []
@@ -551,7 +550,7 @@ def train(args):
                 label_seq_time = [each[1] for each in sample[2]]
                 label_seq_lat = calculate_relative_location([each[2] for each in sample[2]])
                 label_seq_lon = calculate_relative_location([each[3] for each in sample[2]])
-                label_seq_week = [each[4] for each in sample[2]]
+                # label_seq_week = [each[4] for each in sample[2]]
                 label_seq_cats = [poi_idx2cat_id_dict[each] for each in label_seq]
                 label_seq_category = [poi_idx2category_id_dict[each] for each in label_seq]
 
@@ -563,7 +562,7 @@ def train(args):
                 batch_seq_labels_time.append(torch.FloatTensor(label_seq_time))
                 batch_seq_labels_lat.append(torch.FloatTensor(label_seq_lat))
                 batch_seq_labels_lon.append(torch.FloatTensor(label_seq_lon))
-                batch_seq_labels_week.append(torch.LongTensor(label_seq_week))
+                # batch_seq_labels_week.append(torch.LongTensor(label_seq_week))
                 batch_seq_labels_cat.append(torch.LongTensor(label_seq_cats))
                 batch_seq_labels_categroy.append(torch.LongTensor(label_seq_category))
 
@@ -573,7 +572,7 @@ def train(args):
             label_padded_time = pad_sequence(batch_seq_labels_time, batch_first=True, padding_value=-1)
             label_padded_lat = pad_sequence(batch_seq_labels_lat, batch_first=True, padding_value=-1)
             label_padded_lon = pad_sequence(batch_seq_labels_lon, batch_first=True, padding_value=-1)
-            label_padded_week = pad_sequence(batch_seq_labels_week, batch_first=True, padding_value=-1)
+            # label_padded_week = pad_sequence(batch_seq_labels_week, batch_first=True, padding_value=-1)
             label_padded_cat = pad_sequence(batch_seq_labels_cat, batch_first=True, padding_value=-1)
             label_padded_categroy = pad_sequence(batch_seq_labels_categroy, batch_first=True, padding_value=-1)
 
@@ -583,23 +582,21 @@ def train(args):
             y_time = label_padded_time.to(device=args.device, dtype=torch.float)
             y_lat = label_padded_lat.to(device=args.device, dtype=torch.float)
             y_lon = label_padded_lon.to(device=args.device, dtype=torch.float)
-            y_week = label_padded_week.to(device=args.device, dtype=torch.long)
+            # y_week = label_padded_week.to(device=args.device, dtype=torch.long)
             y_cat = label_padded_cat.to(device=args.device, dtype=torch.long)
             y_categroy = label_padded_categroy.to(device=args.device, dtype=torch.long)
-            # todo:主要还是为了预测下一个poi点,所以需要批判性分析loss_time , loss_cat +loss_lat,loss_lon ,loss_categroy , loss_week是否有必要
-            y_pred_poi, y_pred_time, y_pred_lat, y_pred_lon, y_pred_cat, y_pred_categroy ,y_pred_week = seq_model(x, src_mask)
+            y_pred_poi, y_pred_time, y_pred_lat, y_pred_lon, y_pred_cat, y_pred_categroy  = seq_model(x, src_mask)
             loss_poi = criterion_poi(y_pred_poi.transpose(1, 2), y_poi)
             loss_time = criterion_time(torch.squeeze(y_pred_time), torch.squeeze(y_time))
             loss_lat = criterion_time(torch.squeeze(y_pred_lat), torch.squeeze(y_lat))
             loss_lon = criterion_time(torch.squeeze(y_pred_lon), torch.squeeze(y_lon))
-            loss_week = criterion_week(y_pred_week.transpose(1, 2), y_week)
+            # loss_week = criterion_week(y_pred_week.transpose(1, 2), y_week)
             loss_cat = criterion_cat(y_pred_cat.transpose(1, 2), y_cat)
             loss_categroy = criterion_categroy(y_pred_categroy.transpose(1, 2), y_categroy)
 
             # Final loss
             ## todo:这里损失太多可能有所干扰
-            loss = loss_poi + loss_time * args.time_loss_weight + loss_cat +loss_lat + loss_lon +loss_categroy + loss_week
-            optimizer.zero_grad()
+            loss = loss_poi + loss_time * args.time_loss_weight + loss_cat +loss_lat + loss_lon +loss_categroy 
             loss.backward(retain_graph=True)
             optimizer.step()
 
@@ -620,7 +617,7 @@ def train(args):
             batch_pred_lons = y_pred_lon.detach().cpu().numpy()
             batch_pred_cats = y_pred_cat.detach().cpu().numpy()
             batch_pred_categroys = y_pred_categroy.detach().cpu().numpy()
-            batch_pred_weeks = y_pred_week.detach().cpu().numpy()
+            # batch_pred_weeks = y_pred_week.detach().cpu().numpy()
             for label_pois, pred_pois, seq_len in zip(batch_label_pois, batch_pred_pois, batch_seq_lens):
                 label_pois = label_pois[:seq_len]  # shape: (seq_len, )
                 pred_pois = pred_pois[:seq_len, :]  # shape: (seq_len, num_poi)
@@ -647,7 +644,7 @@ def train(args):
             train_batches_categroy_loss_list.append(loss_categroy.detach().cpu().numpy())
             train_batches_lat_loss_list.append(loss_lat.detach().cpu().numpy())
             train_batches_lon_loss_list.append(loss_lon.detach().cpu().numpy())
-            train_batches_week_loss_list.append(loss_week.detach().cpu().numpy())
+            # train_batches_week_loss_list.append(loss_week.detach().cpu().numpy())
 
             # Report training progress
             if (b_idx % (args.batch * 5)) == 0:
@@ -659,7 +656,7 @@ def train(args):
                              f'train_move_poi_loss:{np.mean(train_batches_poi_loss_list):.2f}\n'
                              f'train_move_lat_loss:{np.mean(train_batches_lat_loss_list):.2f} \n'
                              f'train_move_lon_loss:{np.mean(train_batches_lon_loss_list):.2f} \n'
-                             f'train_move_week_loss:{np.mean(train_batches_week_loss_list):.2f} \n'
+                             # f'train_move_week_loss:{np.mean(train_batches_week_loss_list):.2f} \n'
                              f'train_move_cat_loss:{np.mean(train_batches_cat_loss_list):.2f} \n'
                              f'train_move_cat2_loss:{np.mean(train_batches_categroy_loss_list):.2f} \n'
                              f'train_move_time_loss:{np.mean(train_batches_time_loss_list):.2f}\n'
@@ -684,8 +681,8 @@ def train(args):
                              f'pred_seq_lat:{list(np.squeeze(batch_pred_lats)[sample_idx][:batch_seq_lens[sample_idx]])} \n'
                              f'label_seq_lon:{list(batch_seq_labels_lon[sample_idx].numpy()[:batch_seq_lens[sample_idx]])}\n'
                              f'pred_seq_lat:{list(np.squeeze(batch_pred_lons)[sample_idx][:batch_seq_lens[sample_idx]])} \n'
-                             f'label_seq_week:{list(batch_seq_labels_week[sample_idx].numpy()[:batch_seq_lens[sample_idx]])}\n'
-                             f'pred_seq_week:{list(np.argmax(batch_pred_weeks, axis=2)[sample_idx][:batch_seq_lens[sample_idx]])} \n'
+                             # f'label_seq_week:{list(batch_seq_labels_week[sample_idx].numpy()[:batch_seq_lens[sample_idx]])}\n'
+                             # f'pred_seq_week:{list(np.argmax(batch_pred_weeks, axis=2)[sample_idx][:batch_seq_lens[sample_idx]])} \n'
                              f'label_seq_time:{list(batch_seq_labels_time[sample_idx].numpy()[:batch_seq_lens[sample_idx]])}\n'
                              f'pred_seq_time:{list(np.squeeze(batch_pred_times)[sample_idx][:batch_seq_lens[sample_idx]])} \n' +
                              '=' * 100)
@@ -698,16 +695,16 @@ def train(args):
         time_embed_model.eval()
         lat_embed_model.eval()
         lon_embed_model.eval()
-        week_embed_model.eval()
+        # week_embed_model.eval()
         cat_embed_model.eval()
         categroy_embed_model.eval()
         embed_fuse_model1.eval()
         embed_fuse_model2.eval()
-        embed_fuse_model3.eval()
+        # embed_fuse_model3.eval()
         align_layer.eval()
         seq_model.eval()
-        multihead_attn.eval()
-        layer_norm.eval()
+        # multihead_attn.eval()
+        # layer_norm.eval()
         poi_fusion.eval()
 
 
@@ -740,7 +737,7 @@ def train(args):
             batch_seq_labels_time = []
             batch_seq_labels_lat = []
             batch_seq_labels_lon = []
-            batch_seq_labels_week = []
+            # batch_seq_labels_week = []
             batch_seq_labels_cat = []
             batch_seq_labels_categroy = []
 
@@ -754,7 +751,7 @@ def train(args):
                 label_seq_time = [each[1] for each in sample[2]]
                 label_seq_lat = calculate_relative_location([each[2] for each in sample[2]])
                 label_seq_lon = calculate_relative_location([each[3] for each in sample[2]])
-                label_seq_week = [each[4] for each in sample[2]]
+                #label_seq_week = [each[4] for each in sample[2]]
                 label_seq_cats = [poi_idx2cat_id_dict[each] for each in label_seq]
                 label_seq_category = [poi_idx2category_id_dict[each] for each in label_seq]
                 input_seq_embed = torch.stack(input_traj_to_embeddings(sample, label_seq_lat, label_seq_lon, poi_gcn_embeddings))
@@ -766,7 +763,7 @@ def train(args):
                 batch_seq_labels_time.append(torch.FloatTensor(label_seq_time))
                 batch_seq_labels_lat.append(torch.FloatTensor(label_seq_lat))
                 batch_seq_labels_lon.append(torch.FloatTensor(label_seq_lon))
-                batch_seq_labels_week.append(torch.LongTensor(label_seq_week))
+                # batch_seq_labels_week.append(torch.LongTensor(label_seq_week))
                 batch_seq_labels_cat.append(torch.LongTensor(label_seq_cats))
                 batch_seq_labels_categroy.append(torch.LongTensor(label_seq_category))
 
@@ -776,7 +773,7 @@ def train(args):
             label_padded_time = pad_sequence(batch_seq_labels_time, batch_first=True, padding_value=-1)
             label_padded_lat = pad_sequence(batch_seq_labels_lat, batch_first=True, padding_value=-1)
             label_padded_lon = pad_sequence(batch_seq_labels_lon, batch_first=True, padding_value=-1)
-            label_padded_week = pad_sequence(batch_seq_labels_week, batch_first=True, padding_value=-1)
+            # label_padded_week = pad_sequence(batch_seq_labels_week, batch_first=True, padding_value=-1)
             label_padded_cat = pad_sequence(batch_seq_labels_cat, batch_first=True, padding_value=-1)
             label_padded_categroy = pad_sequence(batch_seq_labels_categroy, batch_first=True, padding_value=-1)
 
@@ -786,10 +783,10 @@ def train(args):
             y_time = label_padded_time.to(device=args.device, dtype=torch.float)
             y_lat = label_padded_lat.to(device=args.device, dtype=torch.float)
             y_lon = label_padded_lon.to(device=args.device, dtype=torch.float)
-            y_week = label_padded_week.to(device=args.device, dtype=torch.long)
+            # y_week = label_padded_week.to(device=args.device, dtype=torch.long)
             y_cat = label_padded_cat.to(device=args.device, dtype=torch.long)
             y_categroy = label_padded_categroy.to(device=args.device, dtype=torch.long)
-            y_pred_poi, y_pred_time, y_pred_lat, y_pred_lon, y_pred_cat, y_pred_categroy , y_pred_week = seq_model(x, src_mask)
+            y_pred_poi, y_pred_time, y_pred_lat, y_pred_lon, y_pred_cat, y_pred_categroy  = seq_model(x, src_mask)
 
 
             # Calculate loss
@@ -797,10 +794,10 @@ def train(args):
             loss_time = criterion_time(torch.squeeze(y_pred_time), torch.squeeze(y_time))
             loss_lat = criterion_time(torch.squeeze(y_pred_lat), torch.squeeze(y_lat))
             loss_lon = criterion_time(torch.squeeze(y_pred_lon), torch.squeeze(y_lon))
-            loss_week = criterion_week(y_pred_week.transpose(1, 2), y_week)
+            # loss_week = criterion_week(y_pred_week.transpose(1, 2), y_week)
             loss_cat = criterion_cat(y_pred_cat.transpose(1, 2), y_cat)
             loss_categroy = criterion_categroy(y_pred_categroy.transpose(1, 2), y_categroy)
-            loss = loss_poi + loss_time * args.time_loss_weight + loss_cat + loss_lat + loss_lon +loss_categroy + loss_week
+            loss = loss_poi + loss_time * args.time_loss_weight + loss_cat + loss_lat + loss_lon +loss_categroy 
 
             # Performance measurement
             top1_acc = 0
@@ -818,7 +815,7 @@ def train(args):
             batch_pred_lons = y_pred_lon.detach().cpu().numpy()
             batch_pred_cats = y_pred_cat.detach().cpu().numpy()
             batch_pred_categroys = y_pred_categroy.detach().cpu().numpy()
-            batch_pred_weeks = y_pred_week.detach().cpu().numpy()
+            # batch_pred_weeks = y_pred_week.detach().cpu().numpy()
             for label_pois, pred_pois, seq_len in zip(batch_label_pois, batch_pred_pois, batch_seq_lens):
                 label_pois = label_pois[:seq_len]  # shape: (seq_len, )
                 pred_pois = pred_pois[:seq_len, :]  # shape: (seq_len, num_poi)
@@ -845,7 +842,7 @@ def train(args):
             val_batches_categroy_loss_list.append(loss_categroy.detach().cpu().numpy())
             val_batches_lat_loss_list.append(loss_lat.detach().cpu().numpy())
             val_batches_lon_loss_list.append(loss_lon.detach().cpu().numpy())
-            val_batches_week_loss_list.append(loss_week.detach().cpu().numpy())
+            # val_batches_week_loss_list.append(loss_week.detach().cpu().numpy())
 
             # Report validation progress
             if (vb_idx % (args.batch * 4)) == 0:
@@ -857,7 +854,7 @@ def train(args):
                              f'val_move_poi_loss:{np.mean(val_batches_poi_loss_list):.2f} \n'
                              f'val_move_lat_loss:{np.mean(val_batches_lat_loss_list):.2f} \n'
                              f'val_move_lon_loss:{np.mean(val_batches_lon_loss_list):.2f} \n'
-                             f'val_move_week_loss:{np.mean(val_batches_week_loss_list):.2f} \n'
+                             # f'val_move_week_loss:{np.mean(val_batches_week_loss_list):.2f} \n'
                              f'val_move_cat_loss:{np.mean(val_batches_cat_loss_list):.2f} \n'
                              f'val_move_cat2_loss:{np.mean(val_batches_categroy_loss_list):.2f} \n'
                              f'val_move_time_loss:{np.mean(val_batches_time_loss_list):.2f} \n'
@@ -882,8 +879,8 @@ def train(args):
                              f'pred_seq_lat:{list(np.squeeze(batch_pred_lats)[sample_idx][:batch_seq_lens[sample_idx]])} \n'
                              f'label_seq_lon:{list(batch_seq_labels_lon[sample_idx].numpy()[:batch_seq_lens[sample_idx]])}\n'
                              f'pred_seq_lat:{list(np.squeeze(batch_pred_lons)[sample_idx][:batch_seq_lens[sample_idx]])} \n'
-                             f'label_seq_week:{list(batch_seq_labels_week[sample_idx].numpy()[:batch_seq_lens[sample_idx]])}\n'
-                             f'pred_seq_week:{list(np.argmax(batch_pred_weeks, axis=2)[sample_idx][:batch_seq_lens[sample_idx]])} \n'
+                             # f'label_seq_week:{list(batch_seq_labels_week[sample_idx].numpy()[:batch_seq_lens[sample_idx]])}\n'
+                             # f'pred_seq_week:{list(np.argmax(batch_pred_weeks, axis=2)[sample_idx][:batch_seq_lens[sample_idx]])} \n'
                              f'label_seq_time:{list(batch_seq_labels_time[sample_idx].numpy()[:batch_seq_lens[sample_idx]])}\n'
                              f'pred_seq_time:{list(np.squeeze(batch_pred_times)[sample_idx][:batch_seq_lens[sample_idx]])} \n' +
                              '=' * 100)
