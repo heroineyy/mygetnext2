@@ -17,7 +17,7 @@ def parameter_parser():
                         help='Random seed')
     parser.add_argument('--device',
                         type=str,
-                        default=3,
+                        default=device,
                         help='')
     parser.add_argument('--data-adj-mtx',
                         type=str,
