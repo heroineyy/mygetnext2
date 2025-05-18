@@ -328,7 +328,7 @@ def train(args):
                                  dropout=args.transformer_dropout)
 
     embed_fuse_model1 = FuseEmbeddings(args.user_embed_dim , args.poi_embed_dim , args.cat_embed_dim , args.cat2_embed_dim).to(args.device)
-    embed_fuse_model2 = FuseEmbeddings(args.time_embed_dim , args.geo_embed_dim ,args.geo_embed_dim).to(args.device)
+    embed_fuse_model2 = FuseEmbeddings(args.geo_embed_dim ,args.geo_embed_dim).to(args.device)
     #embed_fuse_model3 = FuseEmbeddings(args.time_embed_dim ,args.week_embed_dim).to(args.device)
     align_layer = nn.Linear(args.seq_input_embed3, args.seq_input_embed).to(args.device) # 将seq_input_embed3线性转换为seq_input_embed,对齐
 
@@ -364,6 +364,7 @@ def train(args):
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 'min', verbose=True, factor=args.lr_scheduler_factor)
 
+    # %% Tool functions for training
     # %% Tool functions for training
 
     # 封装嵌入转换函数，支持数值型和类别型特征
@@ -596,7 +597,8 @@ def train(args):
 
             # Final loss
             ## todo:这里损失太多可能有所干扰
-            loss = loss_poi + loss_time * args.time_loss_weight + loss_cat +loss_lat + loss_lon +loss_categroy 
+            loss = loss_poi + loss_time * args.time_loss_weight + loss_cat +loss_lat + loss_lon +loss_categroy
+            optimizer.zero_grad()
             loss.backward(retain_graph=True)
             optimizer.step()
 
